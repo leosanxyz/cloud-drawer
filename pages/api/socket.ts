@@ -1,34 +1,31 @@
-import { Server } from "socket.io"
-import type { NextApiRequest } from "next"
-import type { Socket as NetSocket } from "net"
-import type { Server as HTTPServer } from "http"
+import { Server as NetServer } from 'http'
+import { NextApiRequest } from 'next'
+import { Server as ServerIO } from 'socket.io'
+import { NextApiResponseServerIO } from '../../types/next'
+import socketHandler from '@/server/socket'
 
-interface SocketServer extends HTTPServer {
-  io?: Server
+export const config = {
+  api: {
+    bodyParser: false,
+  },
 }
 
-interface SocketWithIO extends NetSocket {
-  server: SocketServer
-}
-
-interface NextApiResponseWithSocket extends NextApiRequest {
-  socket: SocketWithIO
-}
-
-export default function SocketHandler(req: NextApiResponseWithSocket, res: any) {
-  if (res.socket.server.io) {
-    console.log("Socket is already running")
-  } else {
-    console.log("Socket is initializing")
-    const io = new Server(res.socket.server)
-    res.socket.server.io = io
-
-    io.on("connection", (socket) => {
-      socket.on("draw", (data) => {
-        socket.broadcast.emit("draw", data)
-      })
+const ioHandler = (req: NextApiRequest, res: NextApiResponseServerIO) => {
+  if (!res.socket.server.io) {
+    const path = '/api/socket'
+    const httpServer: NetServer = res.socket.server as any
+    const io = new ServerIO(httpServer, {
+      path: path,
+      // Configurar los transportes aquí
+      transports: ['websocket', 'polling'],
+      addTrailingSlash: false,
     })
+    
+    socketHandler(io)
+    res.socket.server.io = io
   }
   res.end()
 }
+
+export default ioHandler
 

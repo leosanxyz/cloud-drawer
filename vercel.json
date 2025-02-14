@@ -5,8 +5,5 @@
       "src": "package.json",
       "use": "@vercel/next"
     }
-  ],
-  "env": {
-    "NEXT_PUBLIC_SOCKET_URL": "https://tu-dominio-vercel.vercel.app"
-  }
+  ]
 } 

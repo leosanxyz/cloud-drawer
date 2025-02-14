@@ -39,19 +39,20 @@ export default function Home() {
     canvas.width = CANVAS_WIDTH
     canvas.height = CANVAS_HEIGHT
 
-    // Connect to WebSocket server with configuration for Vercel
-    socketRef.current = io(process.env.NEXT_PUBLIC_SOCKET_URL || '', {
-      transports: ['polling', 'websocket'],
-      path: '/api/socket'
-    })
+    // Connect to WebSocket server
+    socketRef.current = io()
 
     // Solicitar el estado actual del canvas al conectarse
     socketRef.current.emit('requestCanvasState')
 
     // Escuchar el estado inicial del canvas
     socketRef.current.on('canvasState', (imageData: string) => {
+      if (!imageData) return
+      console.log('Received canvas state')
+      
       const img = new Image()
       img.onload = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height) // Limpiar el canvas primero
         ctx.drawImage(img, 0, 0)
       }
       img.src = imageData
@@ -258,7 +259,7 @@ export default function Home() {
     setTool(newTool)
   }
 
-  const handleAccept = () => {
+  const handleAccept = async () => {
     // Add date text only if there has been any drawing
     if (strokeBoundsRef.current) {
       const now = new Date()
@@ -283,9 +284,12 @@ export default function Home() {
           ctx.fillText(formattedDateTime, textX, textY)
           ctx.restore()
 
-          // Guardar el estado del canvas en el servidor
+          // Guardar el estado del canvas en el servidor y en Supabase
           const imageData = canvas.toDataURL('image/png')
           socketRef.current.emit('saveCanvasState', imageData)
+
+          // Agregar console.log para debugging
+          console.log('Saving canvas state...')
         }
       }
     }

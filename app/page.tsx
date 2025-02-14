@@ -60,6 +60,19 @@ export default function Home() {
     }
   }, [])
 
+  useEffect(() => {
+    const handlePointerUpDocument = (e: PointerEvent) => {
+      if ((e.target as HTMLElement).closest('#controls')) return;
+      setIsPanning(false);
+      setIsDrawing(false);
+      lastPoint.current = null;
+    };
+    document.addEventListener("pointerup", handlePointerUpDocument);
+    return () => {
+      document.removeEventListener("pointerup", handlePointerUpDocument);
+    };
+  }, []);
+
   const getCanvasCoordinates = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current
     if (!canvas) return { x: 0, y: 0 }
@@ -114,11 +127,11 @@ export default function Home() {
     if (currentTool === "pen") {
       ctx.globalCompositeOperation = "source-over"
       ctx.strokeStyle = "rgba(250,250,255,0.3)"
-      ctx.lineWidth = 20
+      ctx.lineWidth = 40
     } else if (currentTool === "eraser") {
       ctx.globalCompositeOperation = "destination-out"
       ctx.strokeStyle = "rgba(0,0,0,1)"
-      ctx.lineWidth = 20
+      ctx.lineWidth = 40
     }
 
     ctx.beginPath()
@@ -227,35 +240,34 @@ export default function Home() {
   }
 
   const handleAccept = () => {
-    const now = new Date()
-    const formattedDateTime = now.toLocaleString("default", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit"
-    })
+    // Add date text only if there has been any drawing
+    if (strokeBoundsRef.current) {
+      const now = new Date()
+      const formattedDateTime = now.toLocaleString("default", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      })
 
-    const canvas = canvasRef.current
-    if (canvas) {
-      const ctx = canvas.getContext("2d")
-      if (ctx) {
-        ctx.save()
-        ctx.font = "20px sans-serif"
-        ctx.fillStyle = "white"
-        ctx.textAlign = "center"
-        let textX, textY;
-        if (strokeBoundsRef.current) {
-          textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
-          textY = strokeBoundsRef.current.maxY + 40
-        } else {
-          textX = offset.x + VIEWPORT_WIDTH / 2
-          textY = offset.y + VIEWPORT_HEIGHT + 40
+      const canvas = canvasRef.current
+      if (canvas) {
+        const ctx = canvas.getContext("2d")
+        if (ctx) {
+          ctx.save()
+          ctx.font = "20px sans-serif"
+          ctx.fillStyle = "white"
+          ctx.textAlign = "center"
+          const textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
+          const textY = strokeBoundsRef.current.maxY + 40
+          ctx.fillText(formattedDateTime, textX, textY)
+          ctx.restore()
         }
-        ctx.fillText(formattedDateTime, textX, textY)
-        ctx.restore()
       }
     }
+    
+    // Always switch to pan mode
     handleToolChange("pan")
   }
 
@@ -290,7 +302,7 @@ export default function Home() {
           }}
         />
       </div>
-      <div className="fixed bottom-8 left-8 flex flex-col gap-3">
+      <div id="controls" className="fixed bottom-8 left-8 flex flex-col gap-3">
         {!isDrawingMode ? (
           <Button 
             className="rounded-full w-16 h-16 p-0 bg-white hover:bg-white/90"

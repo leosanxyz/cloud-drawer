@@ -39,8 +39,23 @@ export default function Home() {
     canvas.width = CANVAS_WIDTH
     canvas.height = CANVAS_HEIGHT
 
-    // Connect to WebSocket server
-    socketRef.current = io()
+    // Connect to WebSocket server with configuration for Vercel
+    socketRef.current = io(process.env.NEXT_PUBLIC_SOCKET_URL || '', {
+      transports: ['polling', 'websocket'],
+      path: '/api/socket'
+    })
+
+    // Solicitar el estado actual del canvas al conectarse
+    socketRef.current.emit('requestCanvasState')
+
+    // Escuchar el estado inicial del canvas
+    socketRef.current.on('canvasState', (imageData: string) => {
+      const img = new Image()
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0)
+      }
+      img.src = imageData
+    })
 
     socketRef.current.on(
       "draw",
@@ -263,6 +278,10 @@ export default function Home() {
           const textY = strokeBoundsRef.current.maxY + 40
           ctx.fillText(formattedDateTime, textX, textY)
           ctx.restore()
+
+          // Guardar el estado del canvas en el servidor
+          const imageData = canvas.toDataURL('image/png')
+          socketRef.current.emit('saveCanvasState', imageData)
         }
       }
     }

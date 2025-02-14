@@ -243,44 +243,41 @@ export default function Home() {
           }}
         />
       </div>
-      <div className="fixed bottom-0 left-0 right-0 flex justify-center gap-2 p-4 bg-white/80 backdrop-blur-sm border-t">
+      <div className="fixed bottom-8 left-8 flex flex-col gap-3">
         {!isDrawingMode ? (
-          <>
-            <Button 
-              variant="outline"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => handleToolChange("pen")}
-            >
-              <Pencil className="w-4 h-4 mr-2" />
-              Draw
-            </Button>
-          </>
+          <Button 
+            className="rounded-full w-16 h-16 p-0 bg-white hover:bg-white/90"
+            variant="outline"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => handleToolChange("pen")}
+          >
+            <Pencil className="w-8 h-8" />
+          </Button>
         ) : (
           <>
             <Button 
+              className="rounded-full w-16 h-16 p-0"
               variant={tool === "pen" ? "default" : "outline"}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => handleToolChange("pen")}
             >
-              <Pencil className="w-4 h-4 mr-2" />
-              Pen
+              <Pencil className="w-8 h-8" />
             </Button>
             <Button 
+              className="rounded-full w-16 h-16 p-0"
               variant={tool === "eraser" ? "default" : "outline"}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => handleToolChange("eraser")}
             >
-              <Eraser className="w-4 h-4 mr-2" />
-              Eraser
+              <Eraser className="w-8 h-8" />
             </Button>
             <Button 
+              className="rounded-full w-16 h-16 p-0 bg-green-600 hover:bg-green-700"
               variant="default"
-              className="bg-green-600 hover:bg-green-700"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => handleToolChange("pan")}
             >
-              <Check className="w-4 h-4 mr-2" />
-              Accept
+              <Check className="w-8 h-8" />
             </Button>
           </>
         )}

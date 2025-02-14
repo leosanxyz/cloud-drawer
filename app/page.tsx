@@ -23,7 +23,7 @@ export default function Home() {
   const [isPanning, setIsPanning] = useState(false)
   const socketRef = useRef<any>(null)
   const lastPoint = useRef<{ x: number; y: number } | null>(null)
-
+  const strokeBoundsRef = useRef<{minX: number, minY: number, maxX: number, maxY: number} | null>(null)
   const isDrawingMode = tool === "pen" || tool === "eraser"
 
   useEffect(() => {
@@ -180,6 +180,13 @@ export default function Home() {
         toY: y,
         tool,
       })
+      // Update the stroke bounds
+      if (strokeBoundsRef.current) {
+        strokeBoundsRef.current.minX = Math.min(strokeBoundsRef.current.minX, x);
+        strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
+        strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
+        strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+      }
     }
     lastPoint.current = { x, y }
   }
@@ -193,6 +200,7 @@ export default function Home() {
     setIsDrawing(true)
     const { x, y } = getCanvasCoordinates(e.clientX, e.clientY)
     lastPoint.current = { x, y }
+    strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
   }
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -212,6 +220,39 @@ export default function Home() {
     setIsPanning(false)
     lastPoint.current = null
     setTool(newTool)
+  }
+
+  const handleAccept = () => {
+    const now = new Date()
+    const formattedDateTime = now.toLocaleString("default", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+
+    const canvas = canvasRef.current
+    if (canvas) {
+      const ctx = canvas.getContext("2d")
+      if (ctx) {
+        ctx.save()
+        ctx.font = "20px sans-serif"
+        ctx.fillStyle = "white"
+        ctx.textAlign = "center"
+        let textX, textY;
+        if (strokeBoundsRef.current) {
+          textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
+          textY = strokeBoundsRef.current.maxY + 40
+        } else {
+          textX = offset.x + VIEWPORT_WIDTH / 2
+          textY = offset.y + VIEWPORT_HEIGHT + 40
+        }
+        ctx.fillText(formattedDateTime, textX, textY)
+        ctx.restore()
+      }
+    }
+    handleToolChange("pan")
   }
 
   return (
@@ -275,7 +316,7 @@ export default function Home() {
               className="rounded-full w-16 h-16 p-0 bg-green-600 hover:bg-green-700"
               variant="default"
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => handleToolChange("pan")}
+              onClick={handleAccept}
             >
               <Check className="w-8 h-8" />
             </Button>

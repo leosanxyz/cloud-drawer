@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import io from "socket.io-client"
 import { Button } from "@/components/ui/button"
-import { Pencil, Eraser, Move } from "lucide-react"
+import { Pencil, Eraser, Move, Check } from "lucide-react"
 
 const CANVAS_WIDTH = 3000
 const CANVAS_HEIGHT = 2000
@@ -14,12 +14,17 @@ type Tool = "pen" | "eraser" | "pan"
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [offset, setOffset] = useState({ x: 0, y: 0 })
-  const [tool, setTool] = useState<Tool>("pen")
+  const [offset, setOffset] = useState({ 
+    x: (CANVAS_WIDTH - VIEWPORT_WIDTH) / 2, 
+    y: (CANVAS_HEIGHT - VIEWPORT_HEIGHT) / 2 
+  })
+  const [tool, setTool] = useState<Tool>("pan")
   const [isDrawing, setIsDrawing] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
   const socketRef = useRef<any>(null)
   const lastPoint = useRef<{ x: number; y: number } | null>(null)
+
+  const isDrawingMode = tool === "pen" || tool === "eraser"
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -106,8 +111,8 @@ export default function Home() {
 
     if (currentTool === "pen") {
       ctx.globalCompositeOperation = "source-over"
-      ctx.strokeStyle = "white"
-      ctx.lineWidth = 5
+      ctx.strokeStyle = "rgba(250,250,255,0.3)"
+      ctx.lineWidth = 20
     } else if (currentTool === "eraser") {
       ctx.globalCompositeOperation = "destination-out"
       ctx.strokeStyle = "rgba(0,0,0,1)"
@@ -119,22 +124,45 @@ export default function Home() {
     ctx.lineTo(toX, toY)
     ctx.stroke()
 
+    if (currentTool === "pen") {
+      // Draw additional irregular strokes to simulate brush texture
+      for (let i = 0; i < 3; i++) {
+        const offsetX = (Math.random() - 0.5) * 4; // random offset between -2 and 2
+        const offsetY = (Math.random() - 0.5) * 4;
+        ctx.beginPath();
+        ctx.moveTo(fromX + offsetX, fromY + offsetY);
+        ctx.lineTo(toX + offsetX, toY + offsetY);
+        ctx.strokeStyle = "rgba(250,240,255,0.3)";
+        ctx.stroke();
+      }
+    } else if (currentTool === "eraser") {
+      // Draw additional irregular strokes to simulate brush texture for eraser
+      for (let i = 0; i < 3; i++) {
+        const offsetX = (Math.random() - 0.5) * 4; // random offset between -2 and 2
+        const offsetY = (Math.random() - 0.5) * 4;
+        ctx.beginPath();
+        ctx.moveTo(fromX + offsetX, fromY + offsetY);
+        ctx.lineTo(toX + offsetX, toY + offsetY);
+        ctx.strokeStyle = "rgba(0,0,0,1)";
+        ctx.stroke();
+      }
+    }
+
     ctx.restore()
   }
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (tool === "pan" && isPanning) {
+    if (!isDrawingMode && isPanning) {
       const dx = e.movementX
       const dy = e.movementY
       setOffset((prev) => ({
         x: Math.max(0, Math.min(CANVAS_WIDTH - VIEWPORT_WIDTH, prev.x - dx)),
         y: Math.max(0, Math.min(CANVAS_HEIGHT - VIEWPORT_HEIGHT, prev.y - dy)),
       }))
-      console.log("Pan movement:", { dx, dy, newOffset: offset })
       return
     }
 
-    if (!isDrawing || tool === "pan") return
+    if (!isDrawing || !isDrawingMode) return
 
     const canvas = canvasRef.current
     if (!canvas) return
@@ -157,7 +185,7 @@ export default function Home() {
   }
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (tool === "pan") {
+    if (!isDrawingMode) {
       setIsPanning(true)
       return
     }
@@ -165,42 +193,39 @@ export default function Home() {
     setIsDrawing(true)
     const { x, y } = getCanvasCoordinates(e.clientX, e.clientY)
     lastPoint.current = { x, y }
-    console.log(`Started ${tool === "pen" ? "drawing" : "erasing"} at (${x}, ${y})`)
   }
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     setIsDrawing(false)
     setIsPanning(false)
     lastPoint.current = null
   }
 
+  const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    setIsDrawing(false)
+    setIsPanning(false)
+    lastPoint.current = null
+  }
+
+  const handleToolChange = (newTool: Tool) => {
+    setIsDrawing(false)
+    setIsPanning(false)
+    lastPoint.current = null
+    setTool(newTool)
+  }
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <div className="flex gap-2 mb-4">
-        <Button variant={tool === "pen" ? "default" : "outline"} onClick={() => setTool("pen")}>
-          <Pencil className="w-4 h-4 mr-2" />
-          Pen
-        </Button>
-        <Button variant={tool === "eraser" ? "default" : "outline"} onClick={() => setTool("eraser")}>
-          <Eraser className="w-4 h-4 mr-2" />
-          Eraser
-        </Button>
-        <Button variant={tool === "pan" ? "default" : "outline"} onClick={() => setTool("pan")}>
-          <Move className="w-4 h-4 mr-2" />
-          Pan
-        </Button>
-      </div>
+    <main className="relative w-screen h-screen overflow-hidden">
       <div
         style={{
-          width: `${VIEWPORT_WIDTH}px`,
-          height: `${VIEWPORT_HEIGHT}px`,
+          width: "100vw",
+          height: "100vh",
           overflow: "hidden",
-          border: "1px solid black",
           position: "relative",
-          cursor: tool === "pan" ? "move" : "crosshair",
+          cursor: isDrawingMode ? "crosshair" : "move",
           backgroundImage: 'url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Cloudless%20Blue%20Sky%20Background-W5DbJt7OROC1E0DSpqRo71xpUJ3ePp.webp")',
           backgroundSize: `${CANVAS_WIDTH}px ${CANVAS_HEIGHT}px`,
-          backgroundPosition: `-${offset.x}px -${offset.y}px`
+          backgroundPosition: `-${offset.x}px -${offset.y}px`,
         }}
       >
         <canvas
@@ -208,7 +233,7 @@ export default function Home() {
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerUp}
+          onPointerLeave={handlePointerLeave}
           style={{
             position: "absolute",
             transform: `translate(${-offset.x}px, ${-offset.y}px)`,
@@ -218,7 +243,50 @@ export default function Home() {
           }}
         />
       </div>
+      <div className="fixed bottom-0 left-0 right-0 flex justify-center gap-2 p-4 bg-white/80 backdrop-blur-sm border-t">
+        {!isDrawingMode ? (
+          <>
+            <Button 
+              variant="outline"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => handleToolChange("pen")}
+            >
+              <Pencil className="w-4 h-4 mr-2" />
+              Draw
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button 
+              variant={tool === "pen" ? "default" : "outline"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => handleToolChange("pen")}
+            >
+              <Pencil className="w-4 h-4 mr-2" />
+              Pen
+            </Button>
+            <Button 
+              variant={tool === "eraser" ? "default" : "outline"}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => handleToolChange("eraser")}
+            >
+              <Eraser className="w-4 h-4 mr-2" />
+              Eraser
+            </Button>
+            <Button 
+              variant="default"
+              className="bg-green-600 hover:bg-green-700"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => handleToolChange("pan")}
+            >
+              <Check className="w-4 h-4 mr-2" />
+              Accept
+            </Button>
+          </>
+        )}
+      </div>
     </main>
   )
 }
+
 

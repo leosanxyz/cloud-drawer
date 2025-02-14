@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import io from "socket.io-client"
 import { Button } from "@/components/ui/button"
 import { Pencil, Eraser, Move, Check } from "lucide-react"
+import { supabase } from "@/lib/supabaseClient"
 
 const CANVAS_WIDTH = 3000
 const CANVAS_HEIGHT = 2000
@@ -41,6 +42,36 @@ export default function Home() {
 
     // Connect to WebSocket server
     socketRef.current = io()
+
+    // Load initial canvas state from Supabase
+    const loadCanvasState = async () => {
+      try {
+        console.log('Fetching initial state from Supabase...')
+        const { data, error } = await supabase
+          .from('canvas_states')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(1)
+
+        if (error) {
+          throw error
+        }
+
+        if (data && data.length > 0) {
+          console.log('Found saved state, loading...')
+          const img = new Image()
+          img.onload = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            ctx.drawImage(img, 0, 0)
+          }
+          img.src = data[0].state
+        }
+      } catch (error) {
+        console.error('Error loading initial state:', error)
+      }
+    }
+
+    loadCanvasState()
 
     // Solicitar el estado actual del canvas al conectarse
     socketRef.current.emit('requestCanvasState')
@@ -275,21 +306,42 @@ export default function Home() {
       if (canvas) {
         const ctx = canvas.getContext("2d")
         if (ctx) {
-          ctx.save()
-          ctx.font = "20px sans-serif"
-          ctx.fillStyle = "white"
-          ctx.textAlign = "center"
-          const textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
-          const textY = strokeBoundsRef.current.maxY + 40
-          ctx.fillText(formattedDateTime, textX, textY)
-          ctx.restore()
+          try {
+            ctx.save()
+            ctx.font = "20px sans-serif"
+            ctx.fillStyle = "white"
+            ctx.textAlign = "center"
+            const textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
+            const textY = strokeBoundsRef.current.maxY + 40
+            ctx.fillText(formattedDateTime, textX, textY)
+            ctx.restore()
 
-          // Guardar el estado del canvas en el servidor y en Supabase
-          const imageData = canvas.toDataURL('image/png')
-          socketRef.current.emit('saveCanvasState', imageData)
+            // Guardar el estado del canvas directamente en Supabase
+            const imageData = canvas.toDataURL('image/png')
+            console.log('Saving to Supabase...')
+            
+            const { error } = await supabase
+              .from('canvas_states')
+              .insert([
+                {
+                  state: imageData,
+                  created_at: new Date().toISOString()
+                }
+              ])
 
-          // Agregar console.log para debugging
-          console.log('Saving canvas state...')
+            if (error) {
+              console.error('Error saving to Supabase:', error)
+              throw error
+            }
+
+            console.log('Successfully saved to Supabase')
+            
+            // También emitir por socket para actualización en tiempo real
+            socketRef.current.emit('saveCanvasState', imageData)
+
+          } catch (error) {
+            console.error('Error in handleAccept:', error)
+          }
         }
       }
     }

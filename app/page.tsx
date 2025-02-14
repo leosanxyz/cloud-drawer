@@ -214,10 +214,12 @@ export default function Home() {
       })
       // Update the stroke bounds
       if (strokeBoundsRef.current) {
-        strokeBoundsRef.current.minX = Math.min(strokeBoundsRef.current.minX, x);
-        strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
-        strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
-        strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+        if (tool === "pen") {
+          strokeBoundsRef.current.minX = Math.min(strokeBoundsRef.current.minX, x);
+          strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
+          strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
+          strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+        }
       }
     }
     lastPoint.current = { x, y }
@@ -232,7 +234,9 @@ export default function Home() {
     setIsDrawing(true)
     const { x, y } = getCanvasCoordinates(e.clientX, e.clientY)
     lastPoint.current = { x, y }
-    strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
+    if (tool === "pen") {
+      strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
+    }
   }
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {

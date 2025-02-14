@@ -3,9 +3,12 @@ import { supabase } from '../lib/supabaseClient'
 
 // Eliminamos la variable canvasState ya que ahora usaremos Supabase
 export default function socketHandler(io: Server) {
-  io.configure((config) => {
-    config.set('transports', ['polling', 'websocket'])
-  })
+  // Configuración para Vercel
+  io.engine.on("connection", (socket) => {
+    socket.transport.on("upgrade", () => {
+      socket.transport.upgrade();
+    });
+  });
 
   io.on('connection', async (socket) => {
     // Cuando un cliente solicita el estado del canvas

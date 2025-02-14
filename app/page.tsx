@@ -25,6 +25,8 @@ export default function Home() {
   const lastPoint = useRef<{ x: number; y: number } | null>(null)
   const strokeBoundsRef = useRef<{minX: number, minY: number, maxX: number, maxY: number} | null>(null)
   const isDrawingMode = tool === "pen" || tool === "eraser"
+  const containerRef = useRef<HTMLDivElement>(null)
+  const backgroundRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -153,13 +155,15 @@ export default function Home() {
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawingMode && isPanning) {
-      const dx = e.movementX
-      const dy = e.movementY
+      const dx = e.movementX;
+      const dy = e.movementY;
+      const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
+      const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
       setOffset((prev) => ({
-        x: Math.max(0, Math.min(CANVAS_WIDTH - VIEWPORT_WIDTH, prev.x - dx)),
-        y: Math.max(0, Math.min(CANVAS_HEIGHT - VIEWPORT_HEIGHT, prev.y - dy)),
-      }))
-      return
+        x: Math.max(0, Math.min(CANVAS_WIDTH - viewportWidth, prev.x - dx)),
+        y: Math.max(0, Math.min(CANVAS_HEIGHT - viewportHeight, prev.y - dy))
+      }));
+      return;
     }
 
     if (!isDrawing || !isDrawingMode) return
@@ -256,8 +260,9 @@ export default function Home() {
   }
 
   return (
-    <main className="relative w-screen h-screen overflow-hidden">
+    <main ref={containerRef} className="relative w-screen h-screen overflow-hidden">
       <div
+        ref={backgroundRef}
         style={{
           width: "100vw",
           height: "100vh",
@@ -267,6 +272,7 @@ export default function Home() {
           backgroundImage: 'url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Cloudless%20Blue%20Sky%20Background-W5DbJt7OROC1E0DSpqRo71xpUJ3ePp.webp")',
           backgroundSize: `${CANVAS_WIDTH}px ${CANVAS_HEIGHT}px`,
           backgroundPosition: `-${offset.x}px -${offset.y}px`,
+          backgroundRepeat: "no-repeat",
         }}
       >
         <canvas

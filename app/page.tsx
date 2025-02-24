@@ -10,6 +10,8 @@ const CANVAS_WIDTH = 3000
 const CANVAS_HEIGHT = 2000
 const VIEWPORT_WIDTH = 800
 const VIEWPORT_HEIGHT = 600
+const MIN_SCALE = 0.6
+const MAX_SCALE = 3.0
 
 type Tool = "pen" | "eraser" | "pan"
 
@@ -19,6 +21,7 @@ export default function Home() {
     x: (CANVAS_WIDTH - VIEWPORT_WIDTH) / 2, 
     y: (CANVAS_HEIGHT - VIEWPORT_HEIGHT) / 2 
   })
+  const [scale, setScale] = useState(1)
   const [tool, setTool] = useState<Tool>("pan")
   const [isDrawing, setIsDrawing] = useState(false)
   const [isPanning, setIsPanning] = useState(false)
@@ -28,6 +31,9 @@ export default function Home() {
   const isDrawingMode = tool === "pen" || tool === "eraser"
   const containerRef = useRef<HTMLDivElement>(null)
   const backgroundRef = useRef<HTMLDivElement>(null)
+  const touchesRef = useRef<Touch[]>([])
+  const lastPinchDistanceRef = useRef<number | null>(null)
+  const lastTouchCenterRef = useRef<{x: number, y: number} | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -120,35 +126,461 @@ export default function Home() {
     };
   }, []);
 
+  // Add touch event handlers for multi-touch gestures
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      // Store touch points
+      touchesRef.current = Array.from(e.touches);
+      
+      // If we have exactly one touch and we're in drawing mode, start drawing
+      if (e.touches.length === 1 && isDrawingMode) {
+        const touch = e.touches[0];
+        const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+        lastPoint.current = { x, y };
+        setIsDrawing(true);
+        if (tool === "pen") {
+          strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y };
+        }
+      } 
+      // If we have two or more touches, prepare for pinch/pan
+      else if (e.touches.length >= 2) {
+        // Calculate initial pinch distance and center
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        const distance = getPinchDistance(touch1, touch2);
+        const center = {
+          x: (touch1.clientX + touch2.clientX) / 2,
+          y: (touch1.clientY + touch2.clientY) / 2
+        };
+        
+        lastPinchDistanceRef.current = distance;
+        lastTouchCenterRef.current = center;
+        
+        // Prevent default to avoid browser zooming
+        e.preventDefault();
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      // If we have exactly one touch and we're drawing
+      if (e.touches.length === 1 && isDrawing && isDrawingMode) {
+        const touch = e.touches[0];
+        const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+        
+        const ctx = canvas.getContext("2d");
+        if (ctx && lastPoint.current) {
+          drawLine(ctx, lastPoint.current.x, lastPoint.current.y, x, y, tool);
+          
+          socketRef.current.emit("draw", {
+            fromX: lastPoint.current.x,
+            fromY: lastPoint.current.y,
+            toX: x,
+            toY: y,
+            tool,
+          });
+          
+          // Update the stroke bounds
+          if (strokeBoundsRef.current && tool === "pen") {
+            strokeBoundsRef.current.minX = Math.min(strokeBoundsRef.current.minX, x);
+            strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
+            strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
+            strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+          }
+        }
+        lastPoint.current = { x, y };
+      } 
+      // If we have two or more touches, handle pinch/pan
+      else if (e.touches.length >= 2) {
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        
+        // Calculate current pinch distance and center
+        const currentDistance = getPinchDistance(touch1, touch2);
+        const currentCenter = {
+          x: (touch1.clientX + touch2.clientX) / 2,
+          y: (touch1.clientY + touch2.clientY) / 2
+        };
+        
+        // Handle zoom if we have a previous distance
+        if (lastPinchDistanceRef.current !== null) {
+          // Calculate zoom factor
+          const zoomFactor = currentDistance / lastPinchDistanceRef.current;
+          
+          // Get viewport dimensions
+          const rect = canvas.getBoundingClientRect();
+          const viewportWidth = rect.width;
+          const viewportHeight = rect.height;
+          
+          // Calculate minimum scale to ensure background always fills viewport
+          const minScaleX = viewportWidth / CANVAS_WIDTH;
+          const minScaleY = viewportHeight / CANVAS_HEIGHT;
+          const minScale = Math.max(minScaleX, minScaleY);
+          
+          console.log("Pinch zoom:", {
+            currentScale: scale,
+            zoomFactor,
+            minScale
+          });
+          
+          // Apply zoom (scale) - using same logic as wheel zoom
+          setScale(prevScale => {
+            if (zoomFactor > 1) {
+              // Zooming in
+              const newScale = Math.min(prevScale * zoomFactor, MAX_SCALE);
+              return newScale;
+            } else {
+              // Zooming out
+              const newScale = Math.max(prevScale * zoomFactor, minScale);
+              return newScale;
+            }
+          });
+        }
+        
+        // Handle pan if we have a previous center
+        if (lastTouchCenterRef.current !== null) {
+          const dx = currentCenter.x - lastTouchCenterRef.current.x;
+          const dy = currentCenter.y - lastTouchCenterRef.current.y;
+          
+          // Apply pan
+          setOffset(prev => {
+            const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
+            const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
+            
+            return {
+              x: Math.max(0, Math.min(CANVAS_WIDTH * scale - viewportWidth, prev.x - dx)),
+              y: Math.max(0, Math.min(CANVAS_HEIGHT * scale - viewportHeight, prev.y - dy))
+            };
+          });
+        }
+        
+        // Update references for next move
+        lastPinchDistanceRef.current = currentDistance;
+        lastTouchCenterRef.current = currentCenter;
+        
+        // Prevent default to avoid browser zooming
+        e.preventDefault();
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      // Reset touch tracking if no touches remain
+      if (e.touches.length === 0) {
+        touchesRef.current = [];
+        lastPinchDistanceRef.current = null;
+        lastTouchCenterRef.current = null;
+        setIsDrawing(false);
+        lastPoint.current = null;
+      } 
+      // Update touch points if some touches remain
+      else {
+        touchesRef.current = Array.from(e.touches);
+        
+        // If we're down to one touch, reset pinch references
+        if (e.touches.length === 1) {
+          lastPinchDistanceRef.current = null;
+          lastTouchCenterRef.current = null;
+        }
+      }
+    };
+
+    // Helper function to calculate distance between two touch points
+    const getPinchDistance = (touch1: Touch, touch2: Touch) => {
+      const dx = touch1.clientX - touch2.clientX;
+      const dy = touch1.clientY - touch2.clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    };
+
+    // Add event listeners
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+    canvas.addEventListener('touchend', handleTouchEnd);
+    canvas.addEventListener('touchcancel', handleTouchEnd);
+
+    // Cleanup
+    return () => {
+      canvas.removeEventListener('touchstart', handleTouchStart);
+      canvas.removeEventListener('touchmove', handleTouchMove);
+      canvas.removeEventListener('touchend', handleTouchEnd);
+      canvas.removeEventListener('touchcancel', handleTouchEnd);
+    };
+  }, [isDrawingMode, tool, isDrawing, scale]);
+
+  // Add mouse wheel event handler for zooming
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Al inicio, calculamos las dimensiones base del viewport
+    const baseViewportWidth = window.innerWidth;
+    const baseViewportHeight = window.innerHeight;
+    
+    // Calculamos la escala mínima base una sola vez
+    const baseMinScale = Math.max(
+      baseViewportWidth / CANVAS_WIDTH,
+      baseViewportHeight / CANVAS_HEIGHT
+    );
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      
+      // Determine zoom direction - normalize across browsers
+      const zoomIn = e.deltaY < 0;
+      
+      // Get viewport info (current)
+      const rect = canvas.getBoundingClientRect();
+      
+      // Get mouse position relative to canvas
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      
+      // Current scale and zoom factors
+      const currentScale = scale;
+      const zoomInFactor = 1.1;
+      const zoomOutFactor = 0.9;
+      
+      // Calculate new scale based on direction - usando valor fijo MIN_SCALE como límite inferior
+      let newScale;
+      if (zoomIn) {
+        // For zoom in: multiply by factor but cap at MAX_SCALE
+        newScale = Math.min(currentScale * zoomInFactor, MAX_SCALE);
+      } else {
+        // For zoom out: multiply by factor but floor at fixed MIN_SCALE
+        newScale = Math.max(currentScale * zoomOutFactor, MIN_SCALE);
+      }
+      
+      // Debug log with detailed information
+      console.log("Wheel zoom calculation:", {
+        direction: zoomIn ? "in" : "out",
+        currentScale,
+        proposedScale: zoomIn ? currentScale * zoomInFactor : currentScale * zoomOutFactor,
+        newScale,
+        minScale: MIN_SCALE,
+        baseMinScale
+      });
+      
+      // Only proceed if scale would change significantly
+      if (Math.abs(newScale - currentScale) > 0.0001) {
+        // Calculate scale factor between old and new scales
+        const scaleFactor = newScale / currentScale;
+        
+        // Calculate new offsets to zoom toward/from mouse position
+        const newOffsetX = mouseX - (mouseX - offset.x) * scaleFactor;
+        const newOffsetY = mouseY - (mouseY - offset.y) * scaleFactor;
+        
+        // Log offset calculation details
+        console.log("Offset calculation:", {
+          mousePosition: { x: mouseX, y: mouseY },
+          currentOffset: offset,
+          newOffset: { x: newOffsetX, y: newOffsetY },
+          scaleFactor
+        });
+        
+        // Get current viewport dimensions
+        const viewportWidth = rect.width;
+        const viewportHeight = rect.height;
+        
+        // Constraint offsets to valid range
+        const maxOffsetX = Math.max(0, CANVAS_WIDTH * newScale - viewportWidth);
+        const maxOffsetY = Math.max(0, CANVAS_HEIGHT * newScale - viewportHeight);
+        
+        const constrainedOffsetX = Math.max(0, Math.min(maxOffsetX, newOffsetX));
+        const constrainedOffsetY = Math.max(0, Math.min(maxOffsetY, newOffsetY));
+        
+        // Update state
+        setScale(newScale);
+        setOffset({
+          x: constrainedOffsetX,
+          y: constrainedOffsetY
+        });
+        
+        console.log("State updated:", {
+          newScale,
+          newOffset: { x: constrainedOffsetX, y: constrainedOffsetY },
+          maxOffset: { x: maxOffsetX, y: maxOffsetY }
+        });
+      } else {
+        console.log("Scale change too small, ignoring");
+      }
+    };
+
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel);
+    };
+  }, [scale, offset]);
+
+  // Completely rewritten direct zoom function for debugging
+  const forceZoom = (zoomIn: boolean) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    // Get viewport info
+    const rect = canvas.getBoundingClientRect();
+    const viewportWidth = rect.width;
+    const viewportHeight = rect.height;
+    
+    // Center point for zooming
+    const centerX = viewportWidth / 2;
+    const centerY = viewportHeight / 2;
+    
+    console.log("Force zoom - viewport dimensions:", {
+      viewportWidth,
+      viewportHeight,
+      CANVAS_WIDTH,
+      CANVAS_HEIGHT,
+      MIN_SCALE
+    });
+    
+    // Current scale and zoom factors
+    const currentScale = scale;
+    const zoomInFactor = 1.1;
+    const zoomOutFactor = 0.9;
+    
+    // Calculate new scale based on direction - usando valor fijo MIN_SCALE
+    let newScale;
+    if (zoomIn) {
+      // For zoom in: multiply by factor but cap at MAX_SCALE
+      newScale = Math.min(currentScale * zoomInFactor, MAX_SCALE);
+    } else {
+      // For zoom out: multiply by factor but floor at fixed MIN_SCALE
+      newScale = Math.max(currentScale * zoomOutFactor, MIN_SCALE);
+    }
+    
+    console.log("Force zoom calculation:", {
+      direction: zoomIn ? "in" : "out",
+      currentScale,
+      proposedScale: zoomIn ? currentScale * zoomInFactor : currentScale * zoomOutFactor,
+      newScale,
+      minScale: MIN_SCALE,
+      factor: zoomIn ? zoomInFactor : zoomOutFactor
+    });
+    
+    // Only proceed if scale would change
+    if (Math.abs(newScale - currentScale) > 0.0001) {
+      // Calculate simple proportional offsets
+      const simpleOffsetX = offset.x * (newScale / currentScale);
+      const simpleOffsetY = offset.y * (newScale / currentScale);
+      
+      // Calculate maximum valid offsets
+      const maxOffsetX = Math.max(0, CANVAS_WIDTH * newScale - viewportWidth);
+      const maxOffsetY = Math.max(0, CANVAS_HEIGHT * newScale - viewportHeight);
+      
+      // Constrain offsets to valid range
+      const constrainedOffsetX = Math.max(0, Math.min(maxOffsetX, simpleOffsetX));
+      const constrainedOffsetY = Math.max(0, Math.min(maxOffsetY, simpleOffsetY));
+      
+      // Update state
+      setScale(newScale);
+      setOffset({
+        x: constrainedOffsetX,
+        y: constrainedOffsetY
+      });
+      
+      console.log("Force zoom state updated:", {
+        newScale,
+        newOffset: { 
+          x: constrainedOffsetX,
+          y: constrainedOffsetY
+        },
+        maxOffset: {
+          x: maxOffsetX,
+          y: maxOffsetY
+        }
+      });
+    } else {
+      console.log("Force zoom: Scale change too small, ignoring");
+    }
+  };
+
+  // Actualizar manejo de dimensiones cuando cambia el tamaño de la ventana
+  useEffect(() => {
+    const handleResize = () => {
+      if (!canvasRef.current) return;
+      
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      
+      // Calculamos pero NO usamos para limitar el zoom out
+      const calculatedMinScale = Math.max(
+        viewportWidth / CANVAS_WIDTH,
+        viewportHeight / CANVAS_HEIGHT
+      );
+      
+      console.log("Window resize - dimensions:", {
+        currentScale: scale,
+        calculatedMinScale,
+        actualMinScale: MIN_SCALE,
+        viewportWidth,
+        viewportHeight
+      });
+      
+      // Actualizamos los offsets para asegurar que siguen siendo válidos
+      setOffset(prev => {
+        const maxOffsetX = Math.max(0, CANVAS_WIDTH * scale - viewportWidth);
+        const maxOffsetY = Math.max(0, CANVAS_HEIGHT * scale - viewportHeight);
+        
+        return {
+          x: Math.max(0, Math.min(maxOffsetX, prev.x)),
+          y: Math.max(0, Math.min(maxOffsetY, prev.y))
+        };
+      });
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    // Initial check
+    handleResize();
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [scale]);
+
   const getCanvasCoordinates = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current
     if (!canvas) return { x: 0, y: 0 }
 
+    // Obtenemos el rectángulo del elemento canvas en el viewport
     const rect = canvas.getBoundingClientRect()
-    const scaleX = canvas.width / rect.width
-    const scaleY = canvas.height / rect.height
-
-    // Primero ajustamos por el offset visual del canvas
-    const rawX = clientX - rect.left
-    const rawY = clientY - rect.top
-
-    // Luego escalamos al tamaño real del canvas
-    const finalX = rawX * scaleX
-    const finalY = rawY * scaleY
-
-    console.log({
-      mouseX: clientX,
-      mouseY: clientY,
-      canvasLeft: rect.left,
-      canvasTop: rect.top,
-      rawX,
-      rawY,
-      scaleX,
-      scaleY,
-      offset: offset.x,
-      finalX,
-      finalY
-    })
+    
+    // Obtenemos la posición del elemento que contiene el canvas (el div con el fondo)
+    const backgroundRect = backgroundRef.current?.getBoundingClientRect()
+    
+    // Información de diagnóstico
+    console.log("Canvas transform details:", {
+      clientCoords: { x: clientX, y: clientY },
+      canvasRect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      backgroundRect: backgroundRect ? { 
+        left: backgroundRect.left, 
+        top: backgroundRect.top, 
+        width: backgroundRect.width, 
+        height: backgroundRect.height 
+      } : null,
+      transformState: { scale, offset: { x: offset.x, y: offset.y } }
+    });
+    
+    // SOLUCIÓN CORREGIDA:
+    // 1. Calcular la posición relativa al fondo (que siempre está correctamente posicionado)
+    const relativeToBackgroundX = clientX - (backgroundRect?.left || 0);
+    const relativeToBackgroundY = clientY - (backgroundRect?.top || 0);
+    
+    // 2. Añadir el offset actual porque el canvas está desplazado
+    const withOffsetX = relativeToBackgroundX + offset.x;
+    const withOffsetY = relativeToBackgroundY + offset.y;
+    
+    // 3. Dividir por la escala para obtener las coordenadas en el espacio original del canvas
+    const finalX = withOffsetX / scale;
+    const finalY = withOffsetY / scale;
+    
+    console.log("Calculated coordinates (improved):", {
+      relativeToBackground: { x: relativeToBackgroundX, y: relativeToBackgroundY },
+      withOffset: { x: withOffsetX, y: withOffsetY },
+      final: { x: finalX, y: finalY }
+    });
 
     return {
       x: finalX,
@@ -164,8 +596,6 @@ export default function Home() {
     toY: number,
     currentTool: Tool,
   ) => {
-    console.log(`Drawing from (${fromX}, ${fromY}) to (${toX}, ${toY}) with offset: ${offset.x}, ${offset.y}`)
-    
     ctx.save()
 
     ctx.lineCap = "round"
@@ -214,14 +644,17 @@ export default function Home() {
   }
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Only handle mouse/pen events here, touch events are handled separately
+    if (e.pointerType === 'touch') return;
+    
     if (!isDrawingMode && isPanning) {
       const dx = e.movementX;
       const dy = e.movementY;
       const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
       const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
       setOffset((prev) => ({
-        x: Math.max(0, Math.min(CANVAS_WIDTH - viewportWidth, prev.x - dx)),
-        y: Math.max(0, Math.min(CANVAS_HEIGHT - viewportHeight, prev.y - dy))
+        x: Math.max(0, Math.min(CANVAS_WIDTH * scale - viewportWidth, prev.x - dx)),
+        y: Math.max(0, Math.min(CANVAS_HEIGHT * scale - viewportHeight, prev.y - dy))
       }));
       return;
     }
@@ -258,6 +691,9 @@ export default function Home() {
   }
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Only handle mouse/pen events here, touch events are handled separately
+    if (e.pointerType === 'touch') return;
+    
     if (!isDrawingMode) {
       setIsPanning(true)
       return
@@ -272,12 +708,18 @@ export default function Home() {
   }
 
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Only handle mouse/pen events here, touch events are handled separately
+    if (e.pointerType === 'touch') return;
+    
     setIsDrawing(false)
     setIsPanning(false)
     lastPoint.current = null
   }
 
   const handlePointerLeave = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Only handle mouse/pen events here, touch events are handled separately
+    if (e.pointerType === 'touch') return;
+    
     setIsDrawing(false)
     setIsPanning(false)
     lastPoint.current = null
@@ -361,7 +803,7 @@ export default function Home() {
           position: "relative",
           cursor: isDrawingMode ? "crosshair" : "move",
           backgroundImage: 'url("https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Cloudless%20Blue%20Sky%20Background-W5DbJt7OROC1E0DSpqRo71xpUJ3ePp.webp")',
-          backgroundSize: `${CANVAS_WIDTH}px ${CANVAS_HEIGHT}px`,
+          backgroundSize: `${CANVAS_WIDTH * scale}px ${CANVAS_HEIGHT * scale}px`,
           backgroundPosition: `-${offset.x}px -${offset.y}px`,
           backgroundRepeat: "no-repeat",
         }}
@@ -374,12 +816,34 @@ export default function Home() {
           onPointerLeave={handlePointerLeave}
           style={{
             position: "absolute",
-            transform: `translate(${-offset.x}px, ${-offset.y}px)`,
+            transform: `translate(${-offset.x}px, ${-offset.y}px) scale(${scale})`,
+            transformOrigin: "0 0",
             touchAction: "none",
             width: `${CANVAS_WIDTH}px`,
             height: `${CANVAS_HEIGHT}px`,
           }}
         />
+        
+        {/* Zoom indicator */}
+        <div className="fixed top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-full font-mono text-sm z-50">
+          {Math.round(scale * 100)}%
+        </div>
+        
+        {/* Debug zoom buttons */}
+        <div className="fixed top-4 left-4 flex gap-2 z-50">
+          <button 
+            className="bg-black/50 text-white px-3 py-1 rounded-full"
+            onClick={() => forceZoom(true)}
+          >
+            +
+          </button>
+          <button 
+            className="bg-black/50 text-white px-3 py-1 rounded-full"
+            onClick={() => forceZoom(false)}
+          >
+            -
+          </button>
+        </div>
       </div>
       <div id="controls" className="fixed bottom-8 left-8 flex flex-col gap-3">
         {!isDrawingMode ? (

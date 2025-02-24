@@ -40,6 +40,7 @@ export default function Home() {
     lastAction: string,
     values: any[]
   }>({ lastAction: 'none', values: [] });
+  const [zoomDebugInfo, setZoomDebugInfo] = useState<string>("");
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -255,97 +256,38 @@ export default function Home() {
         
         // Handle zoom if we have a previous distance
         if (lastPinchDistanceRef.current !== null) {
-          // Calcular movimiento de los dedos y cambio en la distancia
-          const distanceChange = currentDistance - lastPinchDistanceRef.current;
-          const zoomFactor = currentDistance / lastPinchDistanceRef.current;
+          // 1. Cálculo simple y directo del factor de zoom
+          const rawZoomFactor = currentDistance / lastPinchDistanceRef.current;
           
-          // Almacenar el zoomFactor actual para suavización
-          recentZoomFactorsRef.current.push(zoomFactor);
-          if (recentZoomFactorsRef.current.length > 3) {
-            recentZoomFactorsRef.current.shift(); // Mantener solo los últimos 3
+          // 2. Determinar si es zoom in o zoom out
+          const isZoomingOut = rawZoomFactor > 1;
+          const isZoomingIn = rawZoomFactor < 1;
+          
+          // 3. Crear un factor de zoom ajustado según dirección
+          let adjustedZoomFactor = rawZoomFactor;
+          
+          // Amplificar el zoom out para hacerlo más sensible
+          if (isZoomingOut) {
+            // Hacer que el zoom out sea 1.5 veces más sensible
+            const zoomOutBoost = 1.5;
+            adjustedZoomFactor = 1 + ((rawZoomFactor - 1) * zoomOutBoost);
           }
           
-          // Calcular promedio de zoomFactors recientes para suavizar
-          const avgZoomFactor = recentZoomFactorsRef.current.reduce((sum, factor) => sum + factor, 0) / 
-                               recentZoomFactorsRef.current.length;
+          // 4. Definir un umbral mínimo para aplicar zoom (evita micro-movimientos)
+          const zoomThreshold = 0.015; // 1.5% de cambio mínimo
+          const significantChange = Math.abs(adjustedZoomFactor - 1) > zoomThreshold;
           
-          // Valores absolutos para detectar intención
-          const absDistanceChange = Math.abs(distanceChange);
-          const movementDistance = Math.sqrt(
-            Math.pow(currentCenter.x - lastTouchCenterRef.current!.x, 2) +
-            Math.pow(currentCenter.y - lastTouchCenterRef.current!.y, 2)
-          );
+          // Actualizar info de debug visual
+          setZoomDebugInfo(`
+            Dist: ${Math.round(currentDistance)}px
+            Prev: ${Math.round(lastPinchDistanceRef.current)}px
+            Raw: ${rawZoomFactor.toFixed(3)}
+            Adj: ${adjustedZoomFactor.toFixed(3)}
+            Dir: ${isZoomingOut ? "OUT" : isZoomingIn ? "IN" : "NONE"}
+          `);
           
-          // Detectar dirección de zoom: 1 para zoom in, -1 para zoom out, 0 para indeterminado
-          let zoomDirection = 0;
-          if (distanceChange > 0) {
-            zoomDirection = 1; // Zoom out - separando dedos
-          } else if (distanceChange < 0) {
-            zoomDirection = -1; // Zoom in - acercando dedos
-          }
-          
-          // Determinar intención al inicio del gesto
-          if (initialGestureRef.current === 'unknown') {
-            // Si el cambio de distancia es significativo comparado con el movimiento
-            // establecemos la intención como zoom, de lo contrario como paneo
-            if (absDistanceChange > movementDistance * 0.7 || absDistanceChange > 25) {
-              initialGestureRef.current = 'zoom';
-              // Valores iniciales para debugging
-              debugZoomRef.current = {
-                lastAction: zoomDirection > 0 ? 'zoom_out_start' : 'zoom_in_start',
-                values: []
-              };
-            } else if (movementDistance > 10) {
-              initialGestureRef.current = 'pan';
-            }
-          }
-          
-          // Umbrales diferentes para zoom in y zoom out para hacerlo más balanceado
-          // Para zoom out (separar los dedos) usamos un umbral más bajo
-          const zoomOutThreshold = 0.015; // 1.5%
-          // Para zoom in (acercar los dedos) usamos un umbral más alto
-          const zoomInThreshold = 0.025; // 2.5%
-          
-          // Determinar si el cambio es significativo basado en la dirección
-          const significantZoomChange = zoomDirection > 0 ? 
-                                        (avgZoomFactor - 1) > zoomOutThreshold : // Zoom out
-                                        (1 - avgZoomFactor) > zoomInThreshold;   // Zoom in
-          
-          // Valores de umbral adicionales más grandes para cambios muy claros
-          const obviousZoomChange = Math.abs(avgZoomFactor - 1) > 0.15; // 15% de cambio
-          
-          // Añadir datos para debug
-          debugZoomRef.current.values.push({
-            distanceChange,
-            absDistanceChange,
-            movementDistance,
-            zoomFactor,
-            avgZoomFactor,
-            significantZoomChange,
-            zoomDirection,
-            initialGesture: initialGestureRef.current
-          });
-          
-          // Solo mostramos log cuando hay un cambio significativo
-          if (significantZoomChange) {
-            console.log("Pinch zoom detected:", {
-              currentScale: scale,
-              avgZoomFactor,
-              zoomDirection: zoomDirection > 0 ? "out" : "in",
-              gesture: initialGestureRef.current,
-              significantZoomChange
-            });
-          }
-          
-          // Aplicar zoom sólo si:
-          // 1. La intención detectada es zoom Y el cambio es significativo, o
-          // 2. El cambio es muy obvio (lo que indicaría claramente un pinch)
-          if ((initialGestureRef.current === 'zoom' && significantZoomChange) || 
-              obviousZoomChange) {
-            
-            // Actualizar tipo de acción para debug
-            debugZoomRef.current.lastAction = zoomDirection > 0 ? 'zoom_out_applied' : 'zoom_in_applied';
-            
+          // 5. Solo aplicar zoom si hay un cambio significativo
+          if (significantChange) {
             // Get viewport dimensions
             const rect = canvas.getBoundingClientRect();
             const viewportWidth = rect.width;
@@ -356,29 +298,21 @@ export default function Home() {
             const minScaleY = viewportHeight / CANVAS_HEIGHT;
             const minScale = Math.max(minScaleX, minScaleY);
             
-            // Apply zoom (scale) - using same logic as wheel zoom
+            // Apply zoom directamente usando el factor ajustado
             setScale(prevScale => {
-              // Para zoom out (avgZoomFactor > 1)
-              if (avgZoomFactor > 1) {
-                // Aplicamos un factor adicional para zoom out para que se sienta más responsivo
-                const adjustedFactor = (avgZoomFactor - 1) * 1.2 + 1;
-                const newScale = Math.min(prevScale * adjustedFactor, MAX_SCALE);
-                return newScale;
-              } 
-              // Para zoom in (avgZoomFactor < 1)
-              else {
-                const newScale = Math.max(prevScale * avgZoomFactor, minScale);
-                return newScale;
-              }
+              const newScale = Math.max(
+                Math.min(prevScale * adjustedZoomFactor, MAX_SCALE), 
+                minScale
+              );
+              return newScale;
             });
           }
           
-          // Aplicar paneo siempre, pero usar un factor de reducción si estamos en modo zoom
-          // para evitar que el paneo sea demasiado sensible durante el zoom
-          // Aumentamos la reducción de sensibilidad al paneo durante un zoom
-          const panFactor = initialGestureRef.current === 'zoom' ? 0.3 : 1.0;
+          // 6. Aplicar paneo de manera simplificada
+          // El factor de paneo es 0.5 para gestos de zoom (tanto in como out)
+          // para que el movimiento sea más estable
+          const panFactor = significantChange ? 0.5 : 1.0;
           
-          // Handle pan
           if (lastTouchCenterRef.current !== null) {
             const dx = (currentCenter.x - lastTouchCenterRef.current.x) * panFactor;
             const dy = (currentCenter.y - lastTouchCenterRef.current.y) * panFactor;
@@ -983,7 +917,14 @@ export default function Home() {
           {Math.round(scale * 100)}%
         </div>
         
-        {/* Debug zoom buttons */}
+        {/* Debug zoom info */}
+        {zoomDebugInfo && (
+          <div className="fixed bottom-4 right-4 bg-black/70 text-white p-2 rounded text-xs font-mono z-50 whitespace-pre">
+            {zoomDebugInfo}
+          </div>
+        )}
+        
+        {/* Zoom buttons */}
         <div className="fixed top-4 left-4 flex gap-2 z-50">
           <button 
             className="bg-black/50 text-white px-3 py-1 rounded-full"
@@ -998,10 +939,10 @@ export default function Home() {
             -
           </button>
           
-          {/* Añadir botón para mostrar debug info en la consola */}
+          {/* Botón para mostrar/ocultar depuración visual */}
           <button 
             className="bg-black/50 text-white px-3 py-1 rounded-full text-xs"
-            onClick={() => console.log("Zoom Debug:", debugZoomRef.current)}
+            onClick={() => setZoomDebugInfo(zoomDebugInfo ? "" : "Touching...")}
           >
             Debug
           </button>

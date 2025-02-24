@@ -260,68 +260,66 @@ export default function Home() {
         
         // Handle zoom if we have a previous distance
         if (lastPinchDistanceRef.current !== null) {
-          // ---- LÓGICA MEJORADA PARA ZOOM ----
-          
-          // Cálculo del factor utilizando la distancia inicial
+          // Cálculo de la relación de distancia entre los dedos
           const initialDistance = lastPinchDistanceRef.current;
-          
-          // Aproximación más directa: calcular el zoom desde el inicio del gesto
-          const scaleFactor = currentDistance / initialDistance;
-          
-          // Ajustes para hacer más sensible el zoom out
           const distanceRatio = currentDistance / initialDistance;
-          const zoomOutBoost = distanceRatio > 1 ? 2.0 : 1.0; // Amplificar zoom out aún más
           
-          // Calcular la nueva escala directamente en relación a la escala inicial del gesto
-          const newScale = pinchStartScaleRef.current * (distanceRatio * zoomOutBoost);
+          // Detección correcta de dirección
+          // Si distanceRatio > 1: los dedos se separan = ZOOM OUT (alejar)
+          // Si distanceRatio < 1: los dedos se juntan = ZOOM IN (acercar)
+          const isZoomingOut = distanceRatio > 1;
+          const isZoomingIn = distanceRatio < 1;
           
-          // Información completa para debug
-          const debugInfo = {
-            currentDist: Math.round(currentDistance),
-            initialDist: Math.round(initialDistance),
-            ratio: distanceRatio.toFixed(3),
-            direction: distanceRatio > 1 ? "OUT" : "IN",
-            boost: zoomOutBoost,
-            startScale: pinchStartScaleRef.current.toFixed(2),
-            proposedScale: newScale.toFixed(2)
-          };
+          // Aplicamos boost SOLO para zoom out (cuando dedos se separan)
+          // ya que precisamente queremos hacer el zoom out más sensible
+          let adjustedRatio = distanceRatio;
+          if (isZoomingOut) {
+            // Boost para zoom out - amplificamos el efecto
+            const zoomOutBoost = 2.0; // Factor de amplificación para zoom out
+            adjustedRatio = 1 + ((distanceRatio - 1) * zoomOutBoost);
+          }
           
-          // Mostrar información de debug
-          setZoomDebugInfo(`
-            Curr: ${debugInfo.currentDist}px
-            Init: ${debugInfo.initialDist}px
-            Ratio: ${debugInfo.ratio}
-            Dir: ${debugInfo.direction}
-            Boost: ${debugInfo.boost}
-            Start: ${debugInfo.startScale}
-            New: ${debugInfo.proposedScale}
-          `);
+          // Calcular la nueva escala basada en la escala de inicio del gesto
+          const newScale = pinchStartScaleRef.current * adjustedRatio;
           
-          // Aplicación directa del zoom, sin condiciones complejas
-          // Obtener dimensiones del viewport
-          const rect = canvas.getBoundingClientRect();
-          const viewportWidth = rect.width;
-          const viewportHeight = rect.height;
+          // Obtenemos las dimensiones del viewport del contenedor, no del canvas
+          const viewportWidth = backgroundRef.current?.clientWidth || window.innerWidth;
+          const viewportHeight = backgroundRef.current?.clientHeight || window.innerHeight;
           
-          // Calcular mínima escala permitida
+          // Calculamos la escala mínima basada en estas dimensiones FIJAS, no en las del canvas
           const minScaleX = viewportWidth / CANVAS_WIDTH;
           const minScaleY = viewportHeight / CANVAS_HEIGHT;
-          const minScale = Math.max(minScaleX, minScaleY, MIN_SCALE);
           
-          // Aplicar la escala, restringiendo a los límites min/max
-          const restrictedScale = Math.max(Math.min(newScale, MAX_SCALE), minScale);
+          // Usamos el máximo como escala mínima para asegurar que el canvas siempre llene el viewport
+          // pero NO usamos el valor de MIN_SCALE constante que podría ser demasiado restrictivo
+          const calculatedMinScale = Math.max(minScaleX, minScaleY);
+          // Solo usamos MIN_SCALE si es realmente necesario (si es mayor que la escala calculada)
+          const finalMinScale = Math.max(calculatedMinScale, MIN_SCALE);
+          
+          // Información de debug más clara y detallada
+          setZoomDebugInfo(`
+            Curr: ${Math.round(currentDistance)}px
+            Init: ${Math.round(initialDistance)}px
+            Ratio: ${distanceRatio.toFixed(3)}
+            Adj: ${adjustedRatio.toFixed(3)}
+            Dir: ${isZoomingOut ? "OUT" : isZoomingIn ? "IN" : "NONE"}
+            Start: ${pinchStartScaleRef.current.toFixed(2)}
+            New: ${newScale.toFixed(2)}
+            Min: ${finalMinScale.toFixed(2)}
+          `);
+          
+          // Aplicar la nueva escala, con restricciones correctas
+          const restrictedScale = Math.max(Math.min(newScale, MAX_SCALE), finalMinScale);
           setScale(restrictedScale);
           
           // Aplicar paneo de manera simplificada
           if (lastTouchCenterRef.current !== null) {
-            const dx = (currentCenter.x - lastTouchCenterRef.current.x) * 0.5; // Factor fijo para mejor estabilidad
+            const dx = (currentCenter.x - lastTouchCenterRef.current.x) * 0.5;
             const dy = (currentCenter.y - lastTouchCenterRef.current.y) * 0.5;
             
-            // Apply pan
+            // Apply pan usando restrictedScale para mayor coherencia
             setOffset(prev => {
-              const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
-              const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
-              
+              // Usar directamente viewportWidth y viewportHeight calculados antes
               return {
                 x: Math.max(0, Math.min(CANVAS_WIDTH * restrictedScale - viewportWidth, prev.x - dx)),
                 y: Math.max(0, Math.min(CANVAS_HEIGHT * restrictedScale - viewportHeight, prev.y - dy))

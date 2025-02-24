@@ -34,6 +34,8 @@ export default function Home() {
   const touchesRef = useRef<Touch[]>([])
   const lastPinchDistanceRef = useRef<number | null>(null)
   const lastTouchCenterRef = useRef<{x: number, y: number} | null>(null)
+  const initialGestureRef = useRef<'unknown' | 'zoom' | 'pan'>('unknown')
+  const recentZoomFactorsRef = useRef<number[]>([])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -249,11 +251,47 @@ export default function Home() {
         
         // Handle zoom if we have a previous distance
         if (lastPinchDistanceRef.current !== null) {
-          // Calculate zoom factor - con un umbral para detectar mejor el movimiento
+          // Calcular movimiento de los dedos y cambio en la distancia
+          const distanceChange = currentDistance - lastPinchDistanceRef.current;
           const zoomFactor = currentDistance / lastPinchDistanceRef.current;
-          const significantChange = Math.abs(zoomFactor - 1) > 0.01;
           
-          if (significantChange) {
+          // Almacenar el zoomFactor actual para suavización
+          recentZoomFactorsRef.current.push(zoomFactor);
+          if (recentZoomFactorsRef.current.length > 3) {
+            recentZoomFactorsRef.current.shift(); // Mantener solo los últimos 3
+          }
+          
+          // Calcular promedio de zoomFactors recientes para suavizar
+          const avgZoomFactor = recentZoomFactorsRef.current.reduce((sum, factor) => sum + factor, 0) / 
+                               recentZoomFactorsRef.current.length;
+          
+          // Valores absolutos para detectar intención
+          const absDistanceChange = Math.abs(distanceChange);
+          const movementDistance = Math.sqrt(
+            Math.pow(currentCenter.x - lastTouchCenterRef.current!.x, 2) +
+            Math.pow(currentCenter.y - lastTouchCenterRef.current!.y, 2)
+          );
+          
+          // Determinar intención al inicio del gesto
+          if (initialGestureRef.current === 'unknown') {
+            // Si el cambio de distancia es significativo comparado con el movimiento
+            // establecemos la intención como zoom, de lo contrario como paneo
+            if (absDistanceChange > movementDistance * 0.5 || absDistanceChange > 20) {
+              initialGestureRef.current = 'zoom';
+            } else if (movementDistance > 10) {
+              initialGestureRef.current = 'pan';
+            }
+          }
+          
+          // Umbral más alto para cambios en el zoom: 2% de diferencia
+          const significantZoomChange = Math.abs(avgZoomFactor - 1) > 0.02;
+          
+          // Aplicar zoom sólo si:
+          // 1. La intención detectada es zoom, o
+          // 2. El cambio es muy significativo (lo que indicaría claramente un pinch)
+          if ((initialGestureRef.current === 'zoom' && significantZoomChange) || 
+              Math.abs(avgZoomFactor - 1) > 0.1) {
+            
             // Get viewport dimensions
             const rect = canvas.getBoundingClientRect();
             const viewportWidth = rect.width;
@@ -266,40 +304,46 @@ export default function Home() {
             
             console.log("Pinch zoom:", {
               currentScale: scale,
-              zoomFactor,
-              minScale
+              avgZoomFactor,
+              minScale,
+              gesture: initialGestureRef.current
             });
             
             // Apply zoom (scale) - using same logic as wheel zoom
             setScale(prevScale => {
-              if (zoomFactor > 1) {
-                // Zooming in
-                const newScale = Math.min(prevScale * zoomFactor, MAX_SCALE);
+              // Para zoom in (avgZoomFactor > 1)
+              if (avgZoomFactor > 1) {
+                const newScale = Math.min(prevScale * avgZoomFactor, MAX_SCALE);
                 return newScale;
-              } else {
-                // Zooming out
-                const newScale = Math.max(prevScale * zoomFactor, minScale);
+              } 
+              // Para zoom out (avgZoomFactor < 1)
+              else {
+                const newScale = Math.max(prevScale * avgZoomFactor, minScale);
                 return newScale;
               }
             });
           }
-        }
-        
-        // Handle pan if we have a previous center
-        if (lastTouchCenterRef.current !== null) {
-          const dx = currentCenter.x - lastTouchCenterRef.current.x;
-          const dy = currentCenter.y - lastTouchCenterRef.current.y;
           
-          // Apply pan
-          setOffset(prev => {
-            const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
-            const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
+          // Aplicar paneo siempre, pero usar un factor de reducción si estamos en modo zoom
+          // para evitar que el paneo sea demasiado sensible durante el zoom
+          const panFactor = initialGestureRef.current === 'zoom' ? 0.5 : 1.0;
+          
+          // Handle pan
+          if (lastTouchCenterRef.current !== null) {
+            const dx = (currentCenter.x - lastTouchCenterRef.current.x) * panFactor;
+            const dy = (currentCenter.y - lastTouchCenterRef.current.y) * panFactor;
             
-            return {
-              x: Math.max(0, Math.min(CANVAS_WIDTH * scale - viewportWidth, prev.x - dx)),
-              y: Math.max(0, Math.min(CANVAS_HEIGHT * scale - viewportHeight, prev.y - dy))
-            };
-          });
+            // Apply pan
+            setOffset(prev => {
+              const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
+              const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
+              
+              return {
+                x: Math.max(0, Math.min(CANVAS_WIDTH * scale - viewportWidth, prev.x - dx)),
+                y: Math.max(0, Math.min(CANVAS_HEIGHT * scale - viewportHeight, prev.y - dy))
+              };
+            });
+          }
         }
         
         // Update references for next move
@@ -316,6 +360,9 @@ export default function Home() {
         lastTouchCenterRef.current = null;
         setIsDrawing(false);
         lastPoint.current = null;
+        // Resetear la intención del gesto y los factores de zoom recientes
+        initialGestureRef.current = 'unknown';
+        recentZoomFactorsRef.current = [];
       } 
       // Update touch points if some touches remain
       else {
@@ -323,8 +370,10 @@ export default function Home() {
         
         // Si quedamos con un solo toque después de tener varios
         if (e.touches.length === 1) {
-          // Resetear las referencias de pinch
+          // Resetear las referencias de pinch y la intención del gesto
           lastPinchDistanceRef.current = null;
+          initialGestureRef.current = 'unknown';
+          recentZoomFactorsRef.current = [];
           
           // Si no estamos en modo dibujo, actualizar el punto inicial para paneo con un dedo
           if (!isDrawingMode) {

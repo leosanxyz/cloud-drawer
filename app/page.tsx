@@ -135,18 +135,13 @@ export default function Home() {
       // Store touch points
       touchesRef.current = Array.from(e.touches);
       
-      // If we have exactly one touch and we're in drawing mode, start drawing
-      if (e.touches.length === 1 && isDrawingMode) {
-        const touch = e.touches[0];
-        const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
-        lastPoint.current = { x, y };
-        setIsDrawing(true);
-        if (tool === "pen") {
-          strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y };
-        }
-      } 
-      // If we have two or more touches, prepare for pinch/pan
-      else if (e.touches.length >= 2) {
+      // Si tenemos dos dedos, siempre asumimos que es para pinch/pan,
+      // independientemente de si estamos en modo dibujo
+      if (e.touches.length >= 2) {
+        // Asegurarnos de que el dibujo se detiene
+        setIsDrawing(false);
+        lastPoint.current = null;
+        
         // Calculate initial pinch distance and center
         const touch1 = e.touches[0];
         const touch2 = e.touches[1];
@@ -162,10 +157,32 @@ export default function Home() {
         // Prevent default to avoid browser zooming
         e.preventDefault();
       }
+      // Si tenemos un solo toque y estamos en modo dibujo
+      else if (e.touches.length === 1 && isDrawingMode) {
+        const touch = e.touches[0];
+        const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
+        lastPoint.current = { x, y };
+        setIsDrawing(true);
+        if (tool === "pen") {
+          strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y };
+        }
+      }
+      // Si tenemos un solo toque y no estamos en modo dibujo (modo paneo)
+      else if (e.touches.length === 1 && !isDrawingMode) {
+        // Iniciar el paneo con un solo dedo cuando estamos en modo pan
+        const touch = e.touches[0];
+        lastTouchCenterRef.current = {
+          x: touch.clientX,
+          y: touch.clientY
+        };
+      }
     };
 
     const handleTouchMove = (e: TouchEvent) => {
-      // If we have exactly one touch and we're drawing
+      // Siempre prevenir el comportamiento por defecto para evitar desplazamiento de página
+      e.preventDefault();
+
+      // Si tenemos exactamente un toque y estamos dibujando
       if (e.touches.length === 1 && isDrawing && isDrawingMode) {
         const touch = e.touches[0];
         const { x, y } = getCanvasCoordinates(touch.clientX, touch.clientY);
@@ -192,7 +209,33 @@ export default function Home() {
         }
         lastPoint.current = { x, y };
       } 
-      // If we have two or more touches, handle pinch/pan
+      // Si tenemos un solo toque y estamos en modo paneo (no dibujo)
+      else if (e.touches.length === 1 && !isDrawingMode && lastTouchCenterRef.current) {
+        const touch = e.touches[0];
+        const currentCenter = {
+          x: touch.clientX,
+          y: touch.clientY
+        };
+        
+        // Calcular el desplazamiento
+        const dx = currentCenter.x - lastTouchCenterRef.current.x;
+        const dy = currentCenter.y - lastTouchCenterRef.current.y;
+        
+        // Aplicar el paneo
+        setOffset(prev => {
+          const viewportWidth = Math.floor(backgroundRef.current?.clientWidth || window.innerWidth);
+          const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
+          
+          return {
+            x: Math.max(0, Math.min(CANVAS_WIDTH * scale - viewportWidth, prev.x - dx)),
+            y: Math.max(0, Math.min(CANVAS_HEIGHT * scale - viewportHeight, prev.y - dy))
+          };
+        });
+        
+        // Actualizar la referencia para el próximo movimiento
+        lastTouchCenterRef.current = currentCenter;
+      }
+      // Si tenemos dos o más toques, manejar pinch/pan
       else if (e.touches.length >= 2) {
         const touch1 = e.touches[0];
         const touch2 = e.touches[1];
@@ -206,37 +249,40 @@ export default function Home() {
         
         // Handle zoom if we have a previous distance
         if (lastPinchDistanceRef.current !== null) {
-          // Calculate zoom factor
+          // Calculate zoom factor - con un umbral para detectar mejor el movimiento
           const zoomFactor = currentDistance / lastPinchDistanceRef.current;
+          const significantChange = Math.abs(zoomFactor - 1) > 0.01;
           
-          // Get viewport dimensions
-          const rect = canvas.getBoundingClientRect();
-          const viewportWidth = rect.width;
-          const viewportHeight = rect.height;
-          
-          // Calculate minimum scale to ensure background always fills viewport
-          const minScaleX = viewportWidth / CANVAS_WIDTH;
-          const minScaleY = viewportHeight / CANVAS_HEIGHT;
-          const minScale = Math.max(minScaleX, minScaleY);
-          
-          console.log("Pinch zoom:", {
-            currentScale: scale,
-            zoomFactor,
-            minScale
-          });
-          
-          // Apply zoom (scale) - using same logic as wheel zoom
-          setScale(prevScale => {
-            if (zoomFactor > 1) {
-              // Zooming in
-              const newScale = Math.min(prevScale * zoomFactor, MAX_SCALE);
-              return newScale;
-            } else {
-              // Zooming out
-              const newScale = Math.max(prevScale * zoomFactor, minScale);
-              return newScale;
-            }
-          });
+          if (significantChange) {
+            // Get viewport dimensions
+            const rect = canvas.getBoundingClientRect();
+            const viewportWidth = rect.width;
+            const viewportHeight = rect.height;
+            
+            // Calculate minimum scale to ensure background always fills viewport
+            const minScaleX = viewportWidth / CANVAS_WIDTH;
+            const minScaleY = viewportHeight / CANVAS_HEIGHT;
+            const minScale = Math.max(minScaleX, minScaleY);
+            
+            console.log("Pinch zoom:", {
+              currentScale: scale,
+              zoomFactor,
+              minScale
+            });
+            
+            // Apply zoom (scale) - using same logic as wheel zoom
+            setScale(prevScale => {
+              if (zoomFactor > 1) {
+                // Zooming in
+                const newScale = Math.min(prevScale * zoomFactor, MAX_SCALE);
+                return newScale;
+              } else {
+                // Zooming out
+                const newScale = Math.max(prevScale * zoomFactor, minScale);
+                return newScale;
+              }
+            });
+          }
         }
         
         // Handle pan if we have a previous center
@@ -259,9 +305,6 @@ export default function Home() {
         // Update references for next move
         lastPinchDistanceRef.current = currentDistance;
         lastTouchCenterRef.current = currentCenter;
-        
-        // Prevent default to avoid browser zooming
-        e.preventDefault();
       }
     };
 
@@ -278,10 +321,22 @@ export default function Home() {
       else {
         touchesRef.current = Array.from(e.touches);
         
-        // If we're down to one touch, reset pinch references
+        // Si quedamos con un solo toque después de tener varios
         if (e.touches.length === 1) {
+          // Resetear las referencias de pinch
           lastPinchDistanceRef.current = null;
-          lastTouchCenterRef.current = null;
+          
+          // Si no estamos en modo dibujo, actualizar el punto inicial para paneo con un dedo
+          if (!isDrawingMode) {
+            const touch = e.touches[0];
+            lastTouchCenterRef.current = {
+              x: touch.clientX,
+              y: touch.clientY
+            };
+          } else {
+            // En modo dibujo, resetear el centro táctil
+            lastTouchCenterRef.current = null;
+          }
         }
       }
     };

@@ -41,6 +41,7 @@ export default function Home() {
     values: any[]
   }>({ lastAction: 'none', values: [] });
   const [zoomDebugInfo, setZoomDebugInfo] = useState<string>("");
+  const pinchStartScaleRef = useRef<number>(1);
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -158,6 +159,9 @@ export default function Home() {
           y: (touch1.clientY + touch2.clientY) / 2
         };
         
+        // Guardar la escala actual como punto de referencia inicial
+        pinchStartScaleRef.current = scale;
+        
         lastPinchDistanceRef.current = distance;
         lastTouchCenterRef.current = center;
         
@@ -256,66 +260,62 @@ export default function Home() {
         
         // Handle zoom if we have a previous distance
         if (lastPinchDistanceRef.current !== null) {
-          // 1. Cálculo simple y directo del factor de zoom
-          const rawZoomFactor = currentDistance / lastPinchDistanceRef.current;
+          // ---- LÓGICA MEJORADA PARA ZOOM ----
           
-          // 2. Determinar si es zoom in o zoom out
-          const isZoomingOut = rawZoomFactor > 1;
-          const isZoomingIn = rawZoomFactor < 1;
+          // Cálculo del factor utilizando la distancia inicial
+          const initialDistance = lastPinchDistanceRef.current;
           
-          // 3. Crear un factor de zoom ajustado según dirección
-          let adjustedZoomFactor = rawZoomFactor;
+          // Aproximación más directa: calcular el zoom desde el inicio del gesto
+          const scaleFactor = currentDistance / initialDistance;
           
-          // Amplificar el zoom out para hacerlo más sensible
-          if (isZoomingOut) {
-            // Hacer que el zoom out sea 1.5 veces más sensible
-            const zoomOutBoost = 1.5;
-            adjustedZoomFactor = 1 + ((rawZoomFactor - 1) * zoomOutBoost);
-          }
+          // Ajustes para hacer más sensible el zoom out
+          const distanceRatio = currentDistance / initialDistance;
+          const zoomOutBoost = distanceRatio > 1 ? 2.0 : 1.0; // Amplificar zoom out aún más
           
-          // 4. Definir un umbral mínimo para aplicar zoom (evita micro-movimientos)
-          const zoomThreshold = 0.015; // 1.5% de cambio mínimo
-          const significantChange = Math.abs(adjustedZoomFactor - 1) > zoomThreshold;
+          // Calcular la nueva escala directamente en relación a la escala inicial del gesto
+          const newScale = pinchStartScaleRef.current * (distanceRatio * zoomOutBoost);
           
-          // Actualizar info de debug visual
+          // Información completa para debug
+          const debugInfo = {
+            currentDist: Math.round(currentDistance),
+            initialDist: Math.round(initialDistance),
+            ratio: distanceRatio.toFixed(3),
+            direction: distanceRatio > 1 ? "OUT" : "IN",
+            boost: zoomOutBoost,
+            startScale: pinchStartScaleRef.current.toFixed(2),
+            proposedScale: newScale.toFixed(2)
+          };
+          
+          // Mostrar información de debug
           setZoomDebugInfo(`
-            Dist: ${Math.round(currentDistance)}px
-            Prev: ${Math.round(lastPinchDistanceRef.current)}px
-            Raw: ${rawZoomFactor.toFixed(3)}
-            Adj: ${adjustedZoomFactor.toFixed(3)}
-            Dir: ${isZoomingOut ? "OUT" : isZoomingIn ? "IN" : "NONE"}
+            Curr: ${debugInfo.currentDist}px
+            Init: ${debugInfo.initialDist}px
+            Ratio: ${debugInfo.ratio}
+            Dir: ${debugInfo.direction}
+            Boost: ${debugInfo.boost}
+            Start: ${debugInfo.startScale}
+            New: ${debugInfo.proposedScale}
           `);
           
-          // 5. Solo aplicar zoom si hay un cambio significativo
-          if (significantChange) {
-            // Get viewport dimensions
-            const rect = canvas.getBoundingClientRect();
-            const viewportWidth = rect.width;
-            const viewportHeight = rect.height;
-            
-            // Calculate minimum scale to ensure background always fills viewport
-            const minScaleX = viewportWidth / CANVAS_WIDTH;
-            const minScaleY = viewportHeight / CANVAS_HEIGHT;
-            const minScale = Math.max(minScaleX, minScaleY);
-            
-            // Apply zoom directamente usando el factor ajustado
-            setScale(prevScale => {
-              const newScale = Math.max(
-                Math.min(prevScale * adjustedZoomFactor, MAX_SCALE), 
-                minScale
-              );
-              return newScale;
-            });
-          }
+          // Aplicación directa del zoom, sin condiciones complejas
+          // Obtener dimensiones del viewport
+          const rect = canvas.getBoundingClientRect();
+          const viewportWidth = rect.width;
+          const viewportHeight = rect.height;
           
-          // 6. Aplicar paneo de manera simplificada
-          // El factor de paneo es 0.5 para gestos de zoom (tanto in como out)
-          // para que el movimiento sea más estable
-          const panFactor = significantChange ? 0.5 : 1.0;
+          // Calcular mínima escala permitida
+          const minScaleX = viewportWidth / CANVAS_WIDTH;
+          const minScaleY = viewportHeight / CANVAS_HEIGHT;
+          const minScale = Math.max(minScaleX, minScaleY, MIN_SCALE);
           
+          // Aplicar la escala, restringiendo a los límites min/max
+          const restrictedScale = Math.max(Math.min(newScale, MAX_SCALE), minScale);
+          setScale(restrictedScale);
+          
+          // Aplicar paneo de manera simplificada
           if (lastTouchCenterRef.current !== null) {
-            const dx = (currentCenter.x - lastTouchCenterRef.current.x) * panFactor;
-            const dy = (currentCenter.y - lastTouchCenterRef.current.y) * panFactor;
+            const dx = (currentCenter.x - lastTouchCenterRef.current.x) * 0.5; // Factor fijo para mejor estabilidad
+            const dy = (currentCenter.y - lastTouchCenterRef.current.y) * 0.5;
             
             // Apply pan
             setOffset(prev => {
@@ -323,16 +323,20 @@ export default function Home() {
               const viewportHeight = Math.floor(backgroundRef.current?.clientHeight || window.innerHeight);
               
               return {
-                x: Math.max(0, Math.min(CANVAS_WIDTH * scale - viewportWidth, prev.x - dx)),
-                y: Math.max(0, Math.min(CANVAS_HEIGHT * scale - viewportHeight, prev.y - dy))
+                x: Math.max(0, Math.min(CANVAS_WIDTH * restrictedScale - viewportWidth, prev.x - dx)),
+                y: Math.max(0, Math.min(CANVAS_HEIGHT * restrictedScale - viewportHeight, prev.y - dy))
               };
             });
           }
+          
+          // Actualizar solamente la referencia del centro para el paneo
+          lastTouchCenterRef.current = currentCenter;
+        } else {
+          // Primera detección de dos dedos, inicializar
+          lastPinchDistanceRef.current = currentDistance;
+          lastTouchCenterRef.current = currentCenter;
+          pinchStartScaleRef.current = scale;
         }
-        
-        // Update references for next move
-        lastPinchDistanceRef.current = currentDistance;
-        lastTouchCenterRef.current = currentCenter;
       }
     };
 
@@ -344,9 +348,11 @@ export default function Home() {
         lastTouchCenterRef.current = null;
         setIsDrawing(false);
         lastPoint.current = null;
-        // Resetear la intención del gesto y los factores de zoom recientes
+        // Resetear estados para el próximo gesto
         initialGestureRef.current = 'unknown';
         recentZoomFactorsRef.current = [];
+        // También dejar de mostrar el debug
+        setZoomDebugInfo("");
       } 
       // Update touch points if some touches remain
       else {
@@ -354,7 +360,7 @@ export default function Home() {
         
         // Si quedamos con un solo toque después de tener varios
         if (e.touches.length === 1) {
-          // Resetear las referencias de pinch y la intención del gesto
+          // Resetear las referencias para el próximo gesto de pinch zoom
           lastPinchDistanceRef.current = null;
           initialGestureRef.current = 'unknown';
           recentZoomFactorsRef.current = [];

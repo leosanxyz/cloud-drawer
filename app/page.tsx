@@ -676,6 +676,7 @@ export default function Home() {
           if (hasPanMovement && consecutiveZoomMovesRef.current > 2) {
             // Aplicar un factor de amortiguación para suavizar el paneo durante el zoom
             const panFactor = 0.5; // Reduce a la mitad la velocidad de paneo durante zoom
+            // Aplicar paneo sin ajuste por scale para mantener velocidad consistente
             applyPanWithConstraints(deltaX * panFactor, deltaY * panFactor);
           }
         } 
@@ -1268,6 +1269,7 @@ export default function Home() {
     
     if (!isDrawingMode && isPanning) {
       // Usar la función applyPanWithConstraints para mantener consistencia
+      // No multiplicar por scale para mantener velocidad de paneo constante
       applyPanWithConstraints(e.movementX, e.movementY);
       return;
     }
@@ -1442,8 +1444,9 @@ export default function Home() {
       // Para evitar ver bordes blancos, necesitamos:
       // 1. Nunca permitir valores negativos
       // 2. Nunca permitir que el borde derecho/inferior del canvas sea visible
-      const newX = Math.max(0, Math.min(maxOffsetX, prev.offset.x - deltaX / prev.scale));
-      const newY = Math.max(0, Math.min(maxOffsetY, prev.offset.y - deltaY / prev.scale));
+      // Eliminar la división por scale para mantener velocidad de paneo constante
+      const newX = Math.max(0, Math.min(maxOffsetX, prev.offset.x - deltaX));
+      const newY = Math.max(0, Math.min(maxOffsetY, prev.offset.y - deltaY));
       
       return {
         ...prev,

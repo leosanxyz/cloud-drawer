@@ -1248,19 +1248,324 @@ export default function Home() {
     
     // Dibujar la línea
     if (currentTool === "pen") {
+      // Función para generar un valor pseudo-aleatorio determinístico basado en coordenadas
+      // Esto garantiza que los mismos trazos se vean iguales en todos los dispositivos
+      const deterministicRandom = (a: number, b: number, seed: number) => {
+        const x = Math.sin(a * 12.9898 + b * 78.233 + seed) * 43758.5453;
+        return x - Math.floor(x);
+      };
+      
+      // Configuración para el pincel nuboso con textura de acuarela
+      // Cambiamos de "lighter" a "source-over" para evitar el exceso de brillo
+      // pero manteniendo la acumulación de color de forma más natural
       ctx.globalCompositeOperation = "source-over";
-      ctx.strokeStyle = "black";
-      ctx.lineWidth = 2;
+      
+      // Guardar el estado actual del contexto
+      ctx.save();
+      
+      // Calculamos el punto medio del trazo para aplicar el gradiente
+      const midX = (fromX + toX) / 2;
+      const midY = (fromY + toY) / 2;
+      
+      // Radio variable que depende de la distancia del trazo (trazos más largos = pinceles más anchos)
+      // Duplicamos el tamaño base del pincel (en lugar de triplicarlo)
+      const baseRadius = Math.max(80, 40 + distance * 0.6);
+      
+      try {
+        // Configurar un pincel con bordes difuminados para simular nubes
+        // Aseguramos que todos los valores sean números válidos y positivos
+        const safeRadius = Math.max(1, baseRadius); // Evitar radios muy pequeños o negativos
+        
+        const gradient = ctx.createRadialGradient(
+          midX, midY, 0,
+          midX, midY, safeRadius
+        );
+        
+        // Colores blancos con diferentes opacidades para crear el efecto nuboso
+        // Mantenemos opacidades sutiles pero ajustamos para el nuevo modo de composición
+        gradient.addColorStop(0, "rgba(255, 255, 255, 0.1)");
+        gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.05)");
+        gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+        
+        // Aplicar el gradiente como estilo de trazo
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 100; // Duplicamos el ancho de la línea (en lugar de triplicarlo)
+        ctx.lineCap = "round"; // Extremos redondeados
+        ctx.lineJoin = "round"; // Uniones redondeadas
+        
+        // Dibujar el trazo principal
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+        
+        // Coordenadas y distancia para el cálculo pseudo-aleatorio consistente
+        const seed = (fromX + fromY + toX + toY) % 1000;
+        
+        // Añadir múltiples trazos con diferentes opacidades y tamaños para crear textura
+        for (let i = 0; i < 5; i++) { // Aumentamos a 5 trazos para más textura
+          // Usar valores determinísticos basados en las coordenadas
+          // Duplicamos el desplazamiento para trazos más variados (en lugar de triplicarlo)
+          const offsetX = (deterministicRandom(fromX, toX, i * 100 + seed) - 0.5) * 50;
+          const offsetY = (deterministicRandom(fromY, toY, i * 200 + seed) - 0.5) * 50;
+          
+          // Reducir tamaño y opacidad para cada trazo adicional
+          const size = Math.max(20, baseRadius - i * 10);
+          
+          // Opacidades más sutiles, con variación basada en el índice del trazo
+          // Esto crea un efecto más etéreo y nuboso pero que se acumula con múltiples pasadas
+          const alpha = 0.04 - i * 0.005; 
+          
+          // Punto medio desplazado para cada subtrazo
+          const offsetMidX = midX + offsetX;
+          const offsetMidY = midY + offsetY;
+          
+          try {
+            // Crear un nuevo gradiente para este trazo
+            // Nos aseguramos de que el radio sea positivo
+            const subGradient = ctx.createRadialGradient(
+              offsetMidX, offsetMidY, 0,
+              offsetMidX, offsetMidY, Math.max(1, size)
+            );
+            
+            subGradient.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+            subGradient.addColorStop(0.5, `rgba(255, 255, 255, ${alpha/2})`);
+            subGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+            
+            // Ancho variable pero determinístico - duplicamos el ancho (en lugar de triplicarlo)
+            const varWidth = 40 + (deterministicRandom(fromX, toY, i * 300 + seed) * 60);
+            
+            ctx.strokeStyle = subGradient;
+            ctx.lineWidth = varWidth;
+            
+            // Desplazar ligeramente los puntos de inicio y fin para cada trazo
+            const fromOffsetX = fromX + offsetX * 0.7;
+            const fromOffsetY = fromY + offsetY * 0.7;
+            const toOffsetX = toX + offsetX * 0.7;
+            const toOffsetY = toY + offsetY * 0.7;
+            
+            // Dibujar trazo adicional con desplazamiento
+            ctx.beginPath();
+            ctx.moveTo(fromOffsetX, fromOffsetY);
+            ctx.lineTo(toOffsetX, toOffsetY);
+            ctx.stroke();
+          } catch (e) {
+            console.error("Error en el gradiente secundario:", e);
+            // Si falla, intentamos con un color sólido como fallback
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.lineWidth = 50; // Duplicamos el ancho del fallback
+            ctx.beginPath();
+            ctx.moveTo(fromX, fromY);
+            ctx.lineTo(toX, toY);
+            ctx.stroke();
+          }
+        }
+        
+        // Añadir un punto de textura para crear un efecto más interesante en los nodos
+        // Solo lo hacemos ocasionalmente para crear variación
+        if (distance < 20 && deterministicRandom(fromX, fromY, seed) > 0.7) {
+          // Crear un punto más denso en los extremos para simular acumulación de acuarela
+          const nodeGradient = ctx.createRadialGradient(
+            fromX, fromY, 0,
+            fromX, fromY, baseRadius * 0.4
+          );
+          
+          nodeGradient.addColorStop(0, "rgba(255, 255, 255, 0.05)");
+          nodeGradient.addColorStop(0.5, "rgba(255, 255, 255, 0.025)");
+          nodeGradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+          
+          ctx.fillStyle = nodeGradient;
+          ctx.beginPath();
+          ctx.arc(fromX, fromY, baseRadius * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } catch (e) {
+        console.error("Error en el gradiente principal:", e);
+        // Si el gradiente falla, utilizamos un pincel sólido como fallback
+        ctx.globalCompositeOperation = "source-over";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.07)"; // Bajamos opacidad del fallback
+        ctx.lineWidth = 80; // Duplicamos el ancho del fallback
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+      }
+      
+      // Restaurar el estado original del contexto
+      ctx.restore();
     } else if (currentTool === "eraser") {
+      // Aplicamos un efecto nuboso similar al pincel pero para borrar
+      // Usamos una opacidad mejorada para un borrado más efectivo pero aún gradual
       ctx.globalCompositeOperation = "destination-out";
-        ctx.strokeStyle = "rgba(0,0,0,1)";
-      ctx.lineWidth = 20;
+      
+      // Guardar el estado actual del contexto
+      ctx.save();
+      
+      // Calculamos el punto medio del trazo para aplicar el gradiente
+      const midX = (fromX + toX) / 2;
+      const midY = (fromY + toY) / 2;
+      
+      // Radio variable que depende de la distancia del trazo
+      const baseRadius = Math.max(80, 40 + distance * 0.6);
+      
+      try {
+        // Configurar un borrador con bordes difuminados
+        const safeRadius = Math.max(1, baseRadius);
+        
+        // FASE 1: Primero aplicamos un trazo sólido con alta opacidad para eliminar completamente el centro
+        // Esto asegura que no queden siluetas o residuos
+        const solidEraser = ctx.createRadialGradient(
+          midX, midY, 0,
+          midX, midY, safeRadius * 0.7 // Radio más pequeño para el borrado completo
+        );
+        
+        // Centro completamente opaco para borrado total
+        solidEraser.addColorStop(0, "rgba(0, 0, 0, 0.3)"); // Opacidad muy alta para eliminar completamente
+        solidEraser.addColorStop(0.6, "rgba(0, 0, 0, 0.15)");
+        solidEraser.addColorStop(1, "rgba(0, 0, 0, 0)");
+        
+        // Aplicar el borrador sólido primero
+        ctx.strokeStyle = solidEraser;
+        ctx.lineWidth = 70; // Ancho más pequeño que el trazo principal
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+        
+        // FASE 2: Aplicar el gradiente normal con bordes suaves
+        const gradient = ctx.createRadialGradient(
+          midX, midY, 0,
+          midX, midY, safeRadius
+        );
+        
+        // Aumentamos aún más las opacidades para un borrado más efectivo
+        gradient.addColorStop(0, "rgba(0, 0, 0, 0.15)"); // Era 0.07
+        gradient.addColorStop(0.5, "rgba(0, 0, 0, 0.08)"); // Era 0.04
+        gradient.addColorStop(1, "rgba(0, 0, 0, 0.02)");  // Era 0.01
+        
+        // Aplicar el gradiente como estilo de trazo
+        ctx.strokeStyle = gradient;
+        ctx.lineWidth = 100;
+        
+        // Dibujar el trazo principal
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+        
+        // Añadir efecto de textura al borrador
+        const seed = (fromX + fromY + toX + toY) % 1000;
+        
+        // Función para generar un valor pseudo-aleatorio determinístico basado en coordenadas
+        const deterministicRandom = (a: number, b: number, seed: number) => {
+          const x = Math.sin(a * 12.9898 + b * 78.233 + seed) * 43758.5453;
+          return x - Math.floor(x);
+        };
+        
+        // Dibujar trazos adicionales con desplazamiento para un borrado más natural
+        for (let i = 0; i < 5; i++) { // Usamos 5 trazos como en el pincel
+          // Usar valores determinísticos basados en las coordenadas
+          const offsetX = (deterministicRandom(fromX, toX, i * 100 + seed) - 0.5) * 50;
+          const offsetY = (deterministicRandom(fromY, toY, i * 200 + seed) - 0.5) * 50;
+          
+          const size = Math.max(20, baseRadius - i * 10);
+          
+          // Aumentamos aún más las opacidades para borrar efectivamente
+          const alpha = 0.08 - i * 0.01; // Era 0.05 - i * 0.006
+          
+          const offsetMidX = midX + offsetX;
+          const offsetMidY = midY + offsetY;
+          
+          try {
+            const subGradient = ctx.createRadialGradient(
+              offsetMidX, offsetMidY, 0,
+              offsetMidX, offsetMidY, Math.max(1, size)
+            );
+            
+            subGradient.addColorStop(0, `rgba(0, 0, 0, ${alpha})`);
+            subGradient.addColorStop(0.5, `rgba(0, 0, 0, ${alpha/1.5})`); // División menos agresiva
+            subGradient.addColorStop(1, "rgba(0, 0, 0, 0.005)"); // Un mínimo de opacidad en los bordes
+            
+            // Ancho variable pero determinístico - igual que el pincel
+            const varWidth = 40 + (deterministicRandom(fromX, toY, i * 300 + seed) * 60);
+            
+            ctx.strokeStyle = subGradient;
+            ctx.lineWidth = varWidth;
+            
+            const fromOffsetX = fromX + offsetX * 0.7;
+            const fromOffsetY = fromY + offsetY * 0.7;
+            const toOffsetX = toX + offsetX * 0.7;
+            const toOffsetY = toY + offsetY * 0.7;
+            
+            ctx.beginPath();
+            ctx.moveTo(fromOffsetX, fromOffsetY);
+            ctx.lineTo(toOffsetX, toOffsetY);
+            ctx.stroke();
+          } catch (e) {
+            // Fallback en caso de error con el gradiente, con opacidad mejorada
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.04)"; // Era 0.02
+            ctx.lineWidth = 50;
+            ctx.beginPath();
+            ctx.moveTo(fromX, fromY);
+            ctx.lineTo(toX, toY);
+            ctx.stroke();
+          }
+        }
+        
+        // Añadir un punto de textura para crear un efecto más interesante en los nodos
+        if (distance < 20 && deterministicRandom(fromX, fromY, seed) > 0.7) {
+          const nodeGradient = ctx.createRadialGradient(
+            fromX, fromY, 0,
+            fromX, fromY, baseRadius * 0.4
+          );
+          
+          // Opacidades aumentadas para los nodos también
+          nodeGradient.addColorStop(0, "rgba(0, 0, 0, 0.06)"); // Era 0.025
+          nodeGradient.addColorStop(0.5, "rgba(0, 0, 0, 0.03)"); // Era 0.01
+          nodeGradient.addColorStop(1, "rgba(0, 0, 0, 0.005)"); // Añadido un mínimo
+          
+          ctx.fillStyle = nodeGradient;
+          ctx.beginPath();
+          ctx.arc(fromX, fromY, baseRadius * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        
+        // Añadir un trazo adicional con más opacidad para eliminar rastros persistentes
+        // Este efecto se dibuja con un radio más pequeño para mantener los bordes suaves
+        if (deterministicRandom(fromX, toX, seed * 2) > 0.4) { // Solo algunas veces para mantener textura
+          const coreGradient = ctx.createRadialGradient(
+            midX, midY, 0,
+            midX, midY, safeRadius * 0.6
+          );
+          
+          coreGradient.addColorStop(0, "rgba(0, 0, 0, 0.1)"); // Núcleo más fuerte
+          coreGradient.addColorStop(0.7, "rgba(0, 0, 0, 0.03)");
+          coreGradient.addColorStop(1, "rgba(0, 0, 0, 0)");
+          
+          ctx.strokeStyle = coreGradient;
+          ctx.lineWidth = 60; // Más delgado que el trazo principal
+          
+          ctx.beginPath();
+          ctx.moveTo(fromX, fromY);
+          ctx.lineTo(toX, toY);
+          ctx.stroke();
+        }
+      } catch (e) {
+        // Fallback simple en caso de error, pero con opacidad mejorada
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.05)"; // Era 0.02
+        ctx.lineWidth = 80;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+      }
+      
+      // Restaurar el estado original del contexto
+      ctx.restore();
     }
-
-    ctx.beginPath();
-    ctx.moveTo(fromX, fromY);
-    ctx.lineTo(toX, toY);
-    ctx.stroke();
   }
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {

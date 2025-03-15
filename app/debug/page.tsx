@@ -115,7 +115,7 @@ export default function Home() {
   });
   
   // Estado para mostrar/ocultar el panel de depuración
-  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [showDebugPanel, setShowDebugPanel] = useState(true);
   
   // Historial de eventos para depuración
   const eventHistoryRef = useRef<{ type: string, touchCount: number, time: number }[]>([]);
@@ -1855,9 +1855,30 @@ export default function Home() {
           }}
         />
         
+        {/* Debug Mode Title */}
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 bg-red-600 text-white px-4 py-1 rounded-full font-bold text-sm z-50">
+          DEBUG MODE
+        </div>
+        
         {/* Zoom indicator */}
         <div className="fixed top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-full font-mono text-sm z-50">
           {Math.round(transform.scale * 100)}%
+        </div>
+        
+        {/* Zoom buttons */}
+        <div className="fixed top-4 left-4 flex gap-2 z-50">
+          <button 
+            className="bg-black/50 text-white px-3 py-1 rounded-full"
+            onClick={() => forceZoom(true)}
+          >
+            +
+          </button>
+          <button 
+            className="bg-black/50 text-white px-3 py-1 rounded-full"
+            onClick={() => forceZoom(false)}
+          >
+            -
+          </button>
         </div>
       </div>
       <div id="controls" className="fixed bottom-8 left-8 flex flex-col gap-3">
@@ -1899,6 +1920,96 @@ export default function Home() {
           </>
         )}
       </div>
+      
+      {/* Botón flotante para mostrar/ocultar panel de depuración */}
+      <button 
+        onClick={() => setShowDebugPanel(!showDebugPanel)}
+        className="fixed top-2 right-2 bg-gray-800 text-white p-2 rounded-full z-50 text-xs"
+      >
+        {showDebugPanel ? "Ocultar Debug" : "Mostrar Debug"}
+      </button>
+      
+      {/* Panel de depuración compacto */}
+      {showDebugPanel && (
+        <div className="fixed top-12 right-2 bg-black bg-opacity-80 text-white p-2 z-50 max-w-[350px] max-h-[80vh] overflow-auto text-xs rounded-lg border border-gray-700 shadow-lg">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="text-sm font-bold">Debug: {debugData.eventType} ({debugData.touchCount})</h3>
+            <div className="flex space-x-1">
+              <span className="bg-purple-800 px-1 rounded text-[10px]">Sesión #{debugData.sessionId}</span>
+              <button 
+                onClick={copyDebugData}
+                className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-1 px-2 rounded text-xs"
+              >
+                Copiar
+              </button>
+            </div>
+          </div>
+          
+          <div className="space-y-1">
+            <p><strong>Modo:</strong> {debugData.isDrawingMode ? 'Dibujo' : 'Pan'}</p>
+            <p><strong>Multi-táctil:</strong> {debugData.lastWasMultiTouch ? 'Sí' : 'No'}</p>
+            <p><strong>Prev. Multi:</strong> {debugData.wasMultiTouchBefore ? 'Sí' : 'No'} ({debugData.previousTouchCount || 0}→{debugData.touchCount})</p>
+            <p><strong>Dibujando:</strong> {debugData.isDrawing ? 'Sí' : 'No'}</p>
+            <p><strong>Timeout:</strong> {debugData.hasTimeout ? 'Sí' : 'No'}</p>
+            <p><strong>Último reset:</strong> <span className="text-yellow-400">{debugData.lastResetReason}</span></p>
+            
+            <div className="flex space-x-2 text-[10px]">
+              <div>
+                <p><strong>Último:</strong></p>
+                <p>{debugData.lastPoint ? 
+                  `x: ${debugData.lastPoint.x.toFixed(0)}, y: ${debugData.lastPoint.y.toFixed(0)}` : 'null'}</p>
+              </div>
+              <div>
+                <p><strong>Pendiente:</strong></p>
+                <p>{debugData.pendingDraw ? 
+                  `x: ${debugData.pendingDraw.x.toFixed(0)}, y: ${debugData.pendingDraw.y.toFixed(0)}` : 'null'}</p>
+              </div>
+            </div>
+            
+            <div className="mt-1">
+              <p><strong>Posición real:</strong></p>
+              <p>{debugData.convertedPosition ? 
+                `x: ${debugData.convertedPosition.x.toFixed(0)}, y: ${debugData.convertedPosition.y.toFixed(0)}` : 'null'}</p>
+            </div>
+          </div>
+          
+          <div className="mt-2">
+            <p><strong>Historial de eventos:</strong></p>
+            <div className="grid grid-cols-2 gap-1 text-[9px]">
+              {debugData.eventHistory.map((event, idx) => (
+                <div key={idx} className={`p-1 rounded ${
+                  event.type === 'touchstart' ? 'bg-green-800' : 
+                  event.type === 'touchmove' ? 'bg-blue-800' : 
+                  event.type === 'touchend' ? 'bg-red-800' :
+                  event.type === 'suspiciousStroke' ? 'bg-orange-800 border border-yellow-400' :
+                  'bg-gray-800'
+                }`}>
+                  {event.type.slice(0, 10)} ({event.touchCount}) - {new Date(event.time).toLocaleTimeString('es-ES', {hour12: false, minute: '2-digit', second: '2-digit'})}
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          {/* Historial de trazos - nuevo */}
+          <div className="mt-3 border-t border-gray-700 pt-2">
+            <p><strong>Últimos trazos:</strong> ({debugData.strokeHistory.length})</p>
+            <div className="grid gap-1 text-[9px]">
+              {debugData.strokeHistory.map((stroke, idx) => (
+                <div key={idx} className={`p-1 rounded ${
+                  stroke.isSuspicious ? 'bg-red-900 border border-red-400' : 'bg-gray-900'
+                }`}>
+                  {idx+1}. De ({stroke.from.x.toFixed(0)},{stroke.from.y.toFixed(0)}) a ({stroke.to.x.toFixed(0)},{stroke.to.y.toFixed(0)})
+                  <div className="grid grid-cols-3 mt-0.5">
+                    <span><strong>Dist:</strong> {stroke.distance.toFixed(0)}px</span>
+                    <span><strong>ΔT:</strong> {stroke.timeDelta}ms</span>
+                    <span>{stroke.isSuspicious ? '⚠️' : '✓'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }

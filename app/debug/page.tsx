@@ -39,6 +39,8 @@ export default function Home() {
   const socketRef = useRef<any>(null)
   const lastPoint = useRef<{ x: number; y: number } | null>(null)
   const strokeBoundsRef = useRef<{minX: number, minY: number, maxX: number, maxY: number} | null>(null)
+  // Nueva referencia para la bounding box de todo el dibujo
+  const drawingBoundsRef = useRef<{minX: number, minY: number, maxX: number, maxY: number} | null>(null)
   const isDrawingMode = tool === "pen" || tool === "eraser"
   const containerRef = useRef<HTMLDivElement>(null)
   const backgroundRef = useRef<HTMLDivElement>(null)
@@ -90,6 +92,8 @@ export default function Home() {
     drawCallCount: number; // Contador de llamadas a drawLine
     lastResetReason: string; // Razón del último reinicio de pendingDraw
     lastFrameDelta: number; // Delta entre el último frame y el actual
+    // Añadir un campo para mostrar la bounding box actual
+    drawingBounds: {minX: number, minY: number, maxX: number, maxY: number} | null;
   }>({
     eventType: "init",
     timestamp: Date.now(),
@@ -111,7 +115,9 @@ export default function Home() {
     sessionId: 0,
     drawCallCount: 0,
     lastResetReason: "init",
-    lastFrameDelta: 0
+    lastFrameDelta: 0,
+    // Inicializar el nuevo campo para la bounding box
+    drawingBounds: null
   });
   
   // Estado para mostrar/ocultar el panel de depuración
@@ -146,6 +152,14 @@ export default function Home() {
   // Añadir nuevas referencias para rastrear mejor los movimientos rápidos
   const lastMoveTimestampRef = useRef<number>(0);
   const consecutiveZoomMovesRef = useRef<number>(0);
+
+  // Añadir un nuevo estado para controlar la visualización del bounding box
+  const [showBoundingBox, setShowBoundingBox] = useState(false);
+
+  // Añadir estado para controlar el margen del texto
+  const [textMargin, setTextMargin] = useState(40);
+  // Añadir estado para controlar el color de la bounding box
+  const [boundingBoxColor, setBoundingBoxColor] = useState('red');
 
   // Función para actualizar los datos de depuración
   const updateDebugData = (eventType: string) => {
@@ -208,7 +222,9 @@ export default function Home() {
       sessionId: sessionIdRef.current,
       drawCallCount: strokeHistoryRef.current.length,
       lastResetReason: lastResetReasonRef.current,
-      lastFrameDelta: lastFrameDelta
+      lastFrameDelta: lastFrameDelta,
+      // Añadir el estado actual de la bounding box del dibujo
+      drawingBounds: drawingBoundsRef.current
     });
   };
   
@@ -312,6 +328,8 @@ export default function Home() {
           img.onload = () => {
             ctx.clearRect(0, 0, canvas.width, canvas.height)
             ctx.drawImage(img, 0, 0)
+            // Reiniciar la bounding box del dibujo cuando se carga un nuevo estado
+            drawingBoundsRef.current = null;
           }
           img.src = data[0].state
         }
@@ -334,6 +352,8 @@ export default function Home() {
       img.onload = () => {
         ctx.clearRect(0, 0, canvas.width, canvas.height) // Limpiar el canvas primero
         ctx.drawImage(img, 0, 0)
+        // Reiniciar la bounding box del dibujo cuando se recibe un nuevo estado
+        drawingBoundsRef.current = null;
       }
       img.src = imageData
     })
@@ -447,6 +467,21 @@ export default function Home() {
                   maxX: pendingDrawRef.current.x, 
                   maxY: pendingDrawRef.current.y 
                 };
+                
+                // También inicializar o actualizar la bounding box del dibujo completo
+                if (drawingBoundsRef.current === null) {
+                  drawingBoundsRef.current = { 
+                    minX: pendingDrawRef.current.x, 
+                    minY: pendingDrawRef.current.y, 
+                    maxX: pendingDrawRef.current.x, 
+                    maxY: pendingDrawRef.current.y 
+                  };
+                } else {
+                  drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, pendingDrawRef.current.x);
+                  drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, pendingDrawRef.current.y);
+                  drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, pendingDrawRef.current.x);
+                  drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, pendingDrawRef.current.y);
+                }
               }
               
               // Ya no estamos en un gesto multi-táctil
@@ -767,6 +802,22 @@ export default function Home() {
           
           // Dibujar la línea
           drawLine(ctx, pendingDrawRef.current.x, pendingDrawRef.current.y, x, y, tool);
+          
+          // Si estamos usando el lápiz, actualizar también la bounding box del dibujo completo
+          if (tool === "pen" && drawingBoundsRef.current) {
+            drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, x, pendingDrawRef.current.x);
+            drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, y, pendingDrawRef.current.y);
+            drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, x, pendingDrawRef.current.x);
+            drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, y, pendingDrawRef.current.y);
+            
+            // Si el bounding box está visible, actualizarlo en tiempo real
+            if (showBoundingBox) {
+              // Permite que el rendering se complete antes de dibujar el bounding box
+              requestAnimationFrame(() => {
+                renderBoundingBox();
+              });
+            }
+          }
           
           // Actualizar el punto pendiente para el siguiente movimiento
           pendingDrawRef.current = { x, y };
@@ -1393,6 +1444,21 @@ export default function Home() {
       
       // Restaurar el estado original del contexto
       ctx.restore();
+      
+      // Actualizar los límites de todo el dibujo cuando se usa el lápiz
+      if (drawingBoundsRef.current === null) {
+        drawingBoundsRef.current = { 
+          minX: Math.min(fromX, toX), 
+          minY: Math.min(fromY, toY), 
+          maxX: Math.max(fromX, toX), 
+          maxY: Math.max(fromY, toY) 
+        };
+      } else {
+        drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, fromX, toX);
+        drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, fromY, toY);
+        drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, fromX, toX);
+        drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, fromY, toY);
+      }
     } else if (currentTool === "eraser") {
       // Aplicamos un efecto nuboso similar al pincel pero para borrar
       // Usamos una opacidad mejorada para un borrado más efectivo pero aún gradual
@@ -1597,6 +1663,7 @@ export default function Home() {
         toY: y,
         tool,
       })
+      
       // Update the stroke bounds
       if (strokeBoundsRef.current) {
         if (tool === "pen") {
@@ -1604,6 +1671,22 @@ export default function Home() {
           strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
           strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
           strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+          
+          // También actualizar la bounding box del dibujo completo
+          if (drawingBoundsRef.current) {
+            drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, x);
+            drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, y);
+            drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, x);
+            drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, y);
+            
+            // Si el bounding box está visible, actualizarlo en tiempo real
+            if (showBoundingBox) {
+              // Permite que el rendering se complete antes de dibujar el bounding box
+              requestAnimationFrame(() => {
+                renderBoundingBox();
+              });
+            }
+          }
         }
       }
     }
@@ -1622,8 +1705,20 @@ export default function Home() {
     setIsDrawing(true)
     const { x, y } = getCanvasCoordinates(e.clientX, e.clientY)
     lastPoint.current = { x, y }
+    
+    // Inicializar o actualizar la bounding box del trazo actual
     if (tool === "pen") {
       strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
+      
+      // También inicializar o actualizar la bounding box del dibujo completo
+      if (drawingBoundsRef.current === null) {
+        drawingBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
+      } else {
+        drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, x)
+        drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, y)
+        drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, x)
+        drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, y)
+      }
     }
   }
 
@@ -1646,12 +1741,25 @@ export default function Home() {
   }
 
   const handleToolChange = (newTool: Tool) => {
+    // Si estamos cambiando de otro modo a modo dibujo, reiniciamos la bounding box del dibujo
+    if (tool !== "pen" && newTool === "pen") {
+      // Solo reiniciar la bounding box si venimos de aceptar un dibujo
+      // Esto es importante para comenzar un dibujo nuevo con una bounding box fresca
+      drawingBoundsRef.current = null;
+    }
+    
     setTool(newTool);
     setIsDrawing(false);
     setIsPanning(false);
     lastPoint.current = null;
     // IMPORTANTE: Limpiar pendingDraw al cambiar de herramienta
     pendingDrawRef.current = null;
+    
+    // Reiniciar los límites del trazo actual
+    strokeBoundsRef.current = null;
+    
+    // Nota: No reiniciamos drawingBoundsRef aquí para mantener los límites del dibujo completo
+    // a menos que vengamos de modo pan y cambiemos a pen (cubierto arriba)
     
     // Si cambiamos a modo dibujo, activar el registro de depuración
     if (newTool !== "pan") {
@@ -1663,9 +1771,10 @@ export default function Home() {
     }
   };
 
+  // Modificar handleAccept para garantizar posicionamiento correcto del texto
   const handleAccept = async () => {
-    // Add date text only if there has been any drawing
-    if (strokeBoundsRef.current) {
+    // Verificar si hay algún dibujo (usando la bounding box completa del dibujo)
+    if (drawingBoundsRef.current) {
       const now = new Date()
       const formattedDateTime = now.toLocaleString("default", {
         year: "numeric",
@@ -1680,18 +1789,60 @@ export default function Home() {
         const ctx = canvas.getContext("2d")
         if (ctx) {
           try {
-            ctx.save()
-            ctx.font = "20px sans-serif"
-            ctx.fillStyle = "white"
-            ctx.textAlign = "center"
-            const textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
-            const textY = strokeBoundsRef.current.maxY + 40
-            ctx.fillText(formattedDateTime, textX, textY)
-            ctx.restore()
+            // Si estamos en modo debug y el bounding box está visible, lo preservamos para referencia
+            let boundingBoxVisible = false;
+            if (showDebugPanel && showBoundingBox) {
+              boundingBoxVisible = true;
+              // Guardamos una copia de la imagen actual para poder restaurarla después
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = canvas.width;
+              tempCanvas.height = canvas.height;
+              const tempCtx = tempCanvas.getContext('2d');
+              if (tempCtx) {
+                tempCtx.drawImage(canvas, 0, 0);
+              }
+              
+              // Dibujar el bounding box antes de añadir el texto para visualización
+              renderBoundingBox();
+              
+              // Esperamos un breve momento para que el usuario pueda ver el bounding box
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // Restauramos la imagen original del canvas
+              if (tempCtx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(tempCanvas, 0, 0);
+              }
+            }
+
+            ctx.save();
+            
+            // IMPORTANTE: Debemos usar una font que sea consistente independientemente de la escala
+            ctx.font = "20px sans-serif";
+            ctx.fillStyle = "white";
+            ctx.textAlign = "center";
+            
+            // Usar la bounding box completa del dibujo para posicionar el texto
+            // Centrar horizontalmente y colocar debajo del dibujo
+            const textX = (drawingBoundsRef.current.minX + drawingBoundsRef.current.maxX) / 2;
+            // Añadir el margen configurable debajo del punto más bajo del dibujo
+            const textY = drawingBoundsRef.current.maxY + textMargin;
+            
+            // Si estamos en debug, mostrar información adicional del cálculo
+            if (boundingBoxVisible) {
+              console.log('Posicionando texto en:', {
+                bounds: drawingBoundsRef.current,
+                textPosition: { x: textX, y: textY },
+                textMargin
+              });
+            }
+            
+            ctx.fillText(formattedDateTime, textX, textY);
+            ctx.restore();
 
             // Guardar el estado del canvas directamente en Supabase
-            const imageData = canvas.toDataURL('image/png')
-            console.log('Saving to Supabase...')
+            const imageData = canvas.toDataURL('image/png');
+            console.log('Saving to Supabase...');
             
             const { error } = await supabase
               .from('canvas_states')
@@ -1700,28 +1851,37 @@ export default function Home() {
                   state: imageData,
                   created_at: new Date().toISOString()
                 }
-              ])
+              ]);
 
             if (error) {
-              console.error('Error saving to Supabase:', error)
-              throw error
+              console.error('Error saving to Supabase:', error);
+              throw error;
             }
 
-            console.log('Successfully saved to Supabase')
+            console.log('Successfully saved to Supabase');
             
             // También emitir por socket para actualización en tiempo real
-            socketRef.current.emit('saveCanvasState', imageData)
+            socketRef.current.emit('saveCanvasState', imageData);
+            
+            // Reiniciar la bounding box del dibujo después de guardar
+            drawingBoundsRef.current = null;
 
           } catch (error) {
-            console.error('Error in handleAccept:', error)
+            console.error('Error in handleAccept:', error);
           }
         }
+      }
+    } else {
+      // Si no hay bounding box pero estamos en modo debug, mostramos un mensaje
+      if (showDebugPanel) {
+        console.warn('No hay bounding box definida. Dibuja algo primero.');
+        alert('No hay dibujo para guardar. Dibuja algo primero.');
       }
     }
     
     // Always switch to pan mode
-    handleToolChange("pan")
-  }
+    handleToolChange("pan");
+  };
 
   const saveCanvasState = async () => {
     // Implementación de la función saveCanvasState
@@ -1821,6 +1981,139 @@ export default function Home() {
         }
       };
     });
+  };
+
+  // Verificar si hay cambios en la bounding box para el panel de depuración
+  useEffect(() => {
+    // Si la depuración está activa, actualizar los datos cuando cambia la bounding box
+    if (debuggingActiveRef.current) {
+      updateDebugData("boundingBoxUpdate");
+    }
+  }, [drawingBoundsRef.current]);
+
+  // Añadir función para dibujar la bounding box visualmente en el canvas
+  const renderBoundingBox = () => {
+    if (!drawingBoundsRef.current || !canvasRef.current) return;
+    
+    // Verificar que la bounding box sea válida antes de dibujarla
+    if (!isValidBoundingBox(drawingBoundsRef.current)) {
+      console.warn('Bounding box inválida:', drawingBoundsRef.current);
+      return;
+    }
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const bounds = drawingBoundsRef.current;
+    
+    // Guardar el estado del contexto
+    ctx.save();
+    
+    // Configurar el estilo para el bounding box
+    ctx.strokeStyle = boundingBoxColor === 'red' ? 'rgba(255, 0, 0, 0.7)' : 
+                      boundingBoxColor === 'blue' ? 'rgba(0, 0, 255, 0.7)' : 
+                      'rgba(0, 255, 0, 0.7)';
+    ctx.lineWidth = 3; // Línea más gruesa
+    ctx.setLineDash([10, 5]); // Línea punteada
+    
+    // Dibujar el rectángulo del bounding box
+    ctx.beginPath();
+    ctx.rect(
+      bounds.minX - 10, 
+      bounds.minY - 10, 
+      bounds.maxX - bounds.minX + 20, 
+      bounds.maxY - bounds.minY + 20
+    );
+    ctx.stroke();
+    
+    // Mostrar las coordenadas en las esquinas con fondo para mejor visibilidad
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'; // Fondo negro semi-transparente
+    
+    // Coordenada superior izquierda
+    const textTopLeft = `(${bounds.minX.toFixed(0)},${bounds.minY.toFixed(0)})`;
+    const textWidthTopLeft = ctx.measureText(textTopLeft).width;
+    ctx.fillRect(bounds.minX - 15, bounds.minY - 30, textWidthTopLeft + 10, 20);
+    
+    // Coordenada inferior derecha
+    const textBottomRight = `(${bounds.maxX.toFixed(0)},${bounds.maxY.toFixed(0)})`;
+    const textWidthBottomRight = ctx.measureText(textBottomRight).width;
+    ctx.fillRect(bounds.maxX - 5, bounds.maxY + 5, textWidthBottomRight + 10, 20);
+    
+    // Texto sobre el fondo
+    ctx.fillStyle = 'rgba(255, 255, 255, 1)'; // Texto blanco
+    ctx.font = '14px monospace';
+    ctx.fillText(textTopLeft, bounds.minX - 10, bounds.minY - 15);
+    ctx.fillText(textBottomRight, bounds.maxX, bounds.maxY + 20);
+    
+    // Dibujar línea indicando donde se colocará el texto
+    const textY = bounds.maxY + textMargin; // Usar el margen configurable
+    const textX = (bounds.minX + bounds.maxX) / 2;
+    
+    // Fondo para la línea de texto
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(bounds.minX - 25, textY - 10, (bounds.maxX - bounds.minX) + 50, 20);
+    
+    // Línea que marca donde va el texto
+    ctx.strokeStyle = 'rgba(0, 255, 0, 0.9)'; // Verde más visible
+    ctx.setLineDash([5, 5]); // Otro patrón de línea punteada
+    ctx.beginPath();
+    ctx.moveTo(bounds.minX - 20, textY);
+    ctx.lineTo(bounds.maxX + 20, textY);
+    ctx.stroke();
+    
+    // Dibujar una marca en el punto exacto donde va el texto
+    ctx.fillStyle = 'rgba(0, 255, 0, 1)';
+    ctx.beginPath();
+    ctx.arc(textX, textY, 5, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Mostrar las coordenadas del texto con fondo
+    const textPositionLabel = `Texto (${textX.toFixed(0)},${textY.toFixed(0)}) [Margen: ${textMargin}px]`;
+    const textWidthPosition = ctx.measureText(textPositionLabel).width;
+    
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(textX + 10, textY - 15, textWidthPosition + 10, 20);
+    
+    ctx.fillStyle = 'rgba(0, 255, 0, 1)';
+    ctx.fillText(textPositionLabel, textX + 15, textY);
+    
+    // Restaurar el estado
+    ctx.restore();
+  };
+
+  // Modificar useEffect para renderizar bounding box cada vez que cambie
+  useEffect(() => {
+    if (showBoundingBox && drawingBoundsRef.current) {
+      // Usar requestAnimationFrame para evitar problemas de rendimiento
+      requestAnimationFrame(() => {
+        renderBoundingBox();
+      });
+    }
+  }, [showBoundingBox, drawingBoundsRef.current, transform.scale]);
+
+  // Añadir un useEffect adicional para limpiar el canvas y redibujar cuando cambia la escala o el offset
+  useEffect(() => {
+    if (showBoundingBox && drawingBoundsRef.current) {
+      // Necesario porque las transformaciones cambian la posición visual del bounding box
+      requestAnimationFrame(() => {
+        renderBoundingBox();
+      });
+    }
+  }, [transform.scale, transform.offset.x, transform.offset.y]);
+
+  // Añadir una función auxiliar para verificar que una bounding box es válida
+  const isValidBoundingBox = (box: {minX: number, minY: number, maxX: number, maxY: number} | null): boolean => {
+    if (!box) return false;
+    
+    // Verifica que los valores mínimos sean menores que los máximos
+    if (box.minX >= box.maxX || box.minY >= box.maxY) return false;
+    
+    // Verifica que el tamaño de la bounding box sea razonable (más de unos pocos píxeles)
+    const width = box.maxX - box.minX;
+    const height = box.maxY - box.minY;
+    
+    return width > 5 && height > 5;
   };
 
   return (
@@ -1929,7 +2222,7 @@ export default function Home() {
         {showDebugPanel ? "Ocultar Debug" : "Mostrar Debug"}
       </button>
       
-      {/* Panel de depuración compacto */}
+      {/* Panel de depuración modificado */}
       {showDebugPanel && (
         <div className="fixed top-12 right-2 bg-black bg-opacity-80 text-white p-2 z-50 max-w-[350px] max-h-[80vh] overflow-auto text-xs rounded-lg border border-gray-700 shadow-lg">
           <div className="flex justify-between items-center mb-2">
@@ -1944,6 +2237,59 @@ export default function Home() {
               </button>
             </div>
           </div>
+          
+          {/* Añadir botón para mostrar/ocultar bounding box */}
+          <div className="mb-2">
+            <button
+              onClick={() => setShowBoundingBox(!showBoundingBox)}
+              className={`w-full py-1 px-2 rounded text-xs ${
+                showBoundingBox ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'
+              } text-white font-bold`}
+            >
+              {showBoundingBox ? 'Ocultar Bounding Box' : 'Mostrar Bounding Box'}
+            </button>
+          </div>
+          
+          {/* Añadir controles para textMargin y boundingBoxColor si bounding box está visible */}
+          {showBoundingBox && (
+            <div className="mb-3 mt-2 border border-gray-600 rounded p-2 bg-gray-800">
+              <p className="font-bold mb-1">Opciones de Bounding Box:</p>
+              
+              <div className="flex items-center mb-2">
+                <span className="mr-2">Margen texto:</span>
+                <input 
+                  type="range" 
+                  min="10" 
+                  max="100" 
+                  value={textMargin} 
+                  onChange={(e) => setTextMargin(parseInt(e.target.value))}
+                  className="w-24 mr-2"
+                />
+                <span className="bg-gray-700 px-2 py-0.5 rounded">{textMargin}px</span>
+              </div>
+              
+              <div className="flex items-center">
+                <span className="mr-2">Color:</span>
+                <div className="flex space-x-1">
+                  <button 
+                    onClick={() => setBoundingBoxColor('red')} 
+                    className={`w-6 h-6 rounded-full ${boundingBoxColor === 'red' ? 'ring-2 ring-white' : ''}`}
+                    style={{ backgroundColor: 'rgba(255, 0, 0, 0.7)' }}
+                  />
+                  <button 
+                    onClick={() => setBoundingBoxColor('green')} 
+                    className={`w-6 h-6 rounded-full ${boundingBoxColor === 'green' ? 'ring-2 ring-white' : ''}`}
+                    style={{ backgroundColor: 'rgba(0, 255, 0, 0.7)' }}
+                  />
+                  <button 
+                    onClick={() => setBoundingBoxColor('blue')} 
+                    className={`w-6 h-6 rounded-full ${boundingBoxColor === 'blue' ? 'ring-2 ring-white' : ''}`}
+                    style={{ backgroundColor: 'rgba(0, 0, 255, 0.7)' }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
           
           <div className="space-y-1">
             <p><strong>Modo:</strong> {debugData.isDrawingMode ? 'Dibujo' : 'Pan'}</p>
@@ -2007,6 +2353,24 @@ export default function Home() {
                 </div>
               ))}
             </div>
+          </div>
+          
+          {/* Añadir información sobre la bounding box */}
+          <div className="mt-2 border-t border-gray-700 pt-2">
+            <p><strong>Bounding Box:</strong></p>
+            {debugData.drawingBounds ? (
+              <div className="grid grid-cols-2 gap-1 text-[10px]">
+                <span>MinX: {debugData.drawingBounds.minX.toFixed(0)}</span>
+                <span>MinY: {debugData.drawingBounds.minY.toFixed(0)}</span>
+                <span>MaxX: {debugData.drawingBounds.maxX.toFixed(0)}</span>
+                <span>MaxY: {debugData.drawingBounds.maxY.toFixed(0)}</span>
+                <span>Ancho: {(debugData.drawingBounds.maxX - debugData.drawingBounds.minX).toFixed(0)}px</span>
+                <span>Alto: {(debugData.drawingBounds.maxY - debugData.drawingBounds.minY).toFixed(0)}px</span>
+                <span className="col-span-2">Texto Y: {(debugData.drawingBounds.maxY + textMargin).toFixed(0)}px</span>
+              </div>
+            ) : (
+              <span className="text-yellow-400">No hay dibujo activo</span>
+            )}
           </div>
         </div>
       )}

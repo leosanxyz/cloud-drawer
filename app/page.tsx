@@ -39,6 +39,8 @@ export default function Home() {
   const socketRef = useRef<any>(null)
   const lastPoint = useRef<{ x: number; y: number } | null>(null)
   const strokeBoundsRef = useRef<{minX: number, minY: number, maxX: number, maxY: number} | null>(null)
+  // Nueva referencia para la bounding box de todo el dibujo
+  const drawingBoundsRef = useRef<{minX: number, minY: number, maxX: number, maxY: number} | null>(null)
   const isDrawingMode = tool === "pen" || tool === "eraser"
   const containerRef = useRef<HTMLDivElement>(null)
   const backgroundRef = useRef<HTMLDivElement>(null)
@@ -447,6 +449,21 @@ export default function Home() {
                   maxX: pendingDrawRef.current.x, 
                   maxY: pendingDrawRef.current.y 
                 };
+                
+                // También inicializar o actualizar la bounding box del dibujo completo
+                if (drawingBoundsRef.current === null) {
+                  drawingBoundsRef.current = { 
+                    minX: pendingDrawRef.current.x, 
+                    minY: pendingDrawRef.current.y, 
+                    maxX: pendingDrawRef.current.x, 
+                    maxY: pendingDrawRef.current.y 
+                  };
+                } else {
+                  drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, pendingDrawRef.current.x);
+                  drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, pendingDrawRef.current.y);
+                  drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, pendingDrawRef.current.x);
+                  drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, pendingDrawRef.current.y);
+                }
               }
               
               // Ya no estamos en un gesto multi-táctil
@@ -767,6 +784,31 @@ export default function Home() {
           
           // Dibujar la línea
           drawLine(ctx, pendingDrawRef.current.x, pendingDrawRef.current.y, x, y, tool);
+          
+          // Emitir el evento de dibujo al socket para sincronización
+          socketRef.current.emit("draw", {
+            fromX: pendingDrawRef.current.x,
+            fromY: pendingDrawRef.current.y,
+            toX: x,
+            toY: y,
+            tool,
+          });
+          
+          // Actualizar el strokeBoundsRef para mantener registro de las dimensiones del trazo
+          if (strokeBoundsRef.current && tool === "pen") {
+            strokeBoundsRef.current.minX = Math.min(strokeBoundsRef.current.minX, x);
+            strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
+            strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
+            strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+            
+            // También actualizar la bounding box del dibujo completo
+            if (drawingBoundsRef.current) {
+              drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, x);
+              drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, y);
+              drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, x);
+              drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, y);
+            }
+          }
           
           // Actualizar el punto pendiente para el siguiente movimiento
           pendingDrawRef.current = { x, y };
@@ -1393,6 +1435,21 @@ export default function Home() {
       
       // Restaurar el estado original del contexto
       ctx.restore();
+      
+      // Actualizar los límites de todo el dibujo cuando se usa el lápiz
+      if (drawingBoundsRef.current === null) {
+        drawingBoundsRef.current = { 
+          minX: Math.min(fromX, toX), 
+          minY: Math.min(fromY, toY), 
+          maxX: Math.max(fromX, toX), 
+          maxY: Math.max(fromY, toY) 
+        };
+      } else {
+        drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, fromX, toX);
+        drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, fromY, toY);
+        drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, fromX, toX);
+        drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, fromY, toY);
+      }
     } else if (currentTool === "eraser") {
       // Aplicamos un efecto nuboso similar al pincel pero para borrar
       // Usamos una opacidad mejorada para un borrado más efectivo pero aún gradual
@@ -1604,6 +1661,14 @@ export default function Home() {
           strokeBoundsRef.current.minY = Math.min(strokeBoundsRef.current.minY, y);
           strokeBoundsRef.current.maxX = Math.max(strokeBoundsRef.current.maxX, x);
           strokeBoundsRef.current.maxY = Math.max(strokeBoundsRef.current.maxY, y);
+          
+          // También actualizar la bounding box del dibujo completo
+          if (drawingBoundsRef.current) {
+            drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, x);
+            drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, y);
+            drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, x);
+            drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, y);
+          }
         }
       }
     }
@@ -1622,8 +1687,20 @@ export default function Home() {
     setIsDrawing(true)
     const { x, y } = getCanvasCoordinates(e.clientX, e.clientY)
     lastPoint.current = { x, y }
+    
+    // Inicializar o actualizar la bounding box del trazo actual
     if (tool === "pen") {
       strokeBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
+      
+      // También inicializar o actualizar la bounding box del dibujo completo
+      if (drawingBoundsRef.current === null) {
+        drawingBoundsRef.current = { minX: x, minY: y, maxX: x, maxY: y }
+      } else {
+        drawingBoundsRef.current.minX = Math.min(drawingBoundsRef.current.minX, x)
+        drawingBoundsRef.current.minY = Math.min(drawingBoundsRef.current.minY, y)
+        drawingBoundsRef.current.maxX = Math.max(drawingBoundsRef.current.maxX, x)
+        drawingBoundsRef.current.maxY = Math.max(drawingBoundsRef.current.maxY, y)
+      }
     }
   }
 
@@ -1646,12 +1723,25 @@ export default function Home() {
   }
 
   const handleToolChange = (newTool: Tool) => {
+    // Si estamos cambiando de otro modo a modo dibujo, reiniciamos la bounding box del dibujo
+    if (tool !== "pen" && newTool === "pen") {
+      // Solo reiniciar la bounding box si venimos de aceptar un dibujo
+      // Esto es importante para comenzar un dibujo nuevo con una bounding box fresca
+      drawingBoundsRef.current = null;
+    }
+    
     setTool(newTool);
     setIsDrawing(false);
     setIsPanning(false);
     lastPoint.current = null;
     // IMPORTANTE: Limpiar pendingDraw al cambiar de herramienta
     pendingDrawRef.current = null;
+    
+    // Reiniciar los límites del trazo actual
+    strokeBoundsRef.current = null;
+    
+    // Nota: No reiniciamos drawingBoundsRef aquí para mantener los límites del dibujo completo
+    // a menos que vengamos de modo pan y cambiemos a pen (cubierto arriba)
     
     // Si cambiamos a modo dibujo, activar el registro de depuración
     if (newTool !== "pan") {
@@ -1665,7 +1755,7 @@ export default function Home() {
 
   const handleAccept = async () => {
     // Add date text only if there has been any drawing
-    if (strokeBoundsRef.current) {
+    if (drawingBoundsRef.current) {
       const now = new Date()
       const formattedDateTime = now.toLocaleString("default", {
         year: "numeric",
@@ -1684,8 +1774,13 @@ export default function Home() {
             ctx.font = "20px sans-serif"
             ctx.fillStyle = "white"
             ctx.textAlign = "center"
-            const textX = (strokeBoundsRef.current.minX + strokeBoundsRef.current.maxX) / 2
-            const textY = strokeBoundsRef.current.maxY + 40
+            
+            // Usar la bounding box completa del dibujo para posicionar el texto
+            // Centrar horizontalmente y colocar debajo del dibujo
+            const textX = (drawingBoundsRef.current.minX + drawingBoundsRef.current.maxX) / 2
+            // Añadir un margen de 40px debajo del punto más bajo del dibujo
+            const textY = drawingBoundsRef.current.maxY + 40
+            
             ctx.fillText(formattedDateTime, textX, textY)
             ctx.restore()
 
@@ -1711,6 +1806,9 @@ export default function Home() {
             
             // También emitir por socket para actualización en tiempo real
             socketRef.current.emit('saveCanvasState', imageData)
+            
+            // Reiniciar la bounding box del dibujo después de guardar
+            drawingBoundsRef.current = null;
 
           } catch (error) {
             console.error('Error in handleAccept:', error)

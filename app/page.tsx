@@ -21,6 +21,13 @@ const DRAW_DELAY = 60 // Milisegundos de retraso antes de comenzar a dibujar par
 
 type Tool = "pen" | "eraser" | "pan"
 
+// Añadir esta declaración para TypeScript en algún lugar cerca del inicio del archivo
+declare global {
+  interface Window {
+    saveCanvasWithNoteRef?: (noteText: string) => Promise<void>;
+  }
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [transform, setTransform] = useState({
@@ -148,6 +155,26 @@ export default function Home() {
   // Añadir nuevas referencias para rastrear mejor los movimientos rápidos
   const lastMoveTimestampRef = useRef<number>(0);
   const consecutiveZoomMovesRef = useRef<number>(0);
+
+  // Añadir nuevos estados para manejar el punto y el texto
+  const [notePoint, setNotePoint] = useState<{x: number, y: number} | null>(null);
+  const [noteText, setNoteText] = useState<string>("");
+  const [showNoteInput, setShowNoteInput] = useState(false);
+  const [showNote, setShowNote] = useState(false);
+  const noteInputRef = useRef<HTMLInputElement>(null);
+  
+  // Nuevo estado para soportar múltiples puntos de notas
+  const [allNotes, setAllNotes] = useState<{
+    id: number;
+    point: {x: number, y: number};
+    text: string;
+    showBubble: boolean;
+    isTemporary?: boolean; // Optional temporary flag
+  }[]>([]);
+
+  // Variable para almacenar el ID de la última entrada creada
+  const lastCanvasStateIdRef = useRef<number | null>(null);
+  const processingSaveRef = useRef<boolean>(false); // Evitar guardar múltiples veces
 
   // Función para actualizar los datos de depuración
   const updateDebugData = (eventType: string) => {
@@ -291,70 +318,214 @@ export default function Home() {
     canvas.width = CANVAS_WIDTH
     canvas.height = CANVAS_HEIGHT
 
-    // Connect to WebSocket server
-    socketRef.current = io()
+    // Connect to WebSocket server with a timeout to prevent blocking page load
+    const connectSocket = () => {
+      try {
+        if (socketRef.current) {
+          // Already trying to connect or connected
+          return;
+        }
+        
+        socketRef.current = io({
+          path: '/api/socket',
+          transports: ['polling', 'websocket'],
+          reconnectionAttempts: 3,
+          timeout: 3000,
+          reconnectionDelay: 1000,
+          forceNew: true,
+          addTrailingSlash: false
+        });
+        
+        // Add a connection timeout
+        const connectionTimeout = setTimeout(() => {
+          if (socketRef.current && !socketRef.current.connected) {
+            console.log('Socket connection timed out, app will work with limited functionality');
+            socketRef.current.disconnect();
+          }
+        }, 5000);
+        
+        socketRef.current.on('connect', () => {
+          console.log('Socket connected successfully');
+          clearTimeout(connectionTimeout);
+          
+          // Only request canvas state once we're connected
+          safeSocketEmit('requestCanvasState', {});
+        });
+        
+        socketRef.current.on('connect_error', (err: Error) => {
+          console.log('Socket connection error, functionality may be limited:', err.message);
+        });
+        
+        // Set up socket event listeners
+        if (socketRef.current) {
+          // Escuchar el estado inicial del canvas
+          socketRef.current.on('canvasState', (data: any) => {
+            const canvas = canvasRef.current;
+            const ctx = canvas?.getContext("2d");
+            
+            if (!canvas || !ctx) return;
+            
+            if (data.imageData) {
+              const img = new Image();
+              img.onload = () => {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0);
+              };
+              img.src = data.imageData;
+            }
+          });
+          
+          // Listen for drawing events from other clients
+          socketRef.current.on('draw', (data: any) => {
+            const canvas = canvasRef.current;
+            const ctx = canvas?.getContext("2d");
+            
+            if (!canvas || !ctx) return;
+            
+            drawLine(
+              ctx,
+              data.fromX,
+              data.fromY,
+              data.toX,
+              data.toY,
+              data.tool
+            );
+          });
+          
+          // Listen for save confirmation
+          socketRef.current.on('saveConfirmed', (response: any) => {
+            if (response.success) {
+              // Actualizar el ID del estado actual
+              if (response.id) {
+                lastCanvasStateIdRef.current = response.id;
+              }
+            }
+          });
+          
+          // Escuchar actualizaciones de notas
+          socketRef.current.on('noteUpdated', (data: any) => {
+            setAllNotes(prev => {
+              // Buscar si ya existe esta nota en nuestro estado
+              const noteIndex = prev.findIndex(note => note.id === data.id);
+              
+              if (noteIndex !== -1) {
+                // Actualizar la nota existente
+                const updatedNotes = [...prev];
+                updatedNotes[noteIndex] = {
+                  ...updatedNotes[noteIndex],
+                  text: data.noteText
+                };
+                return updatedNotes;
+              } else if (data.notePoint && data.noteText) {
+                // Agregar una nueva nota si tiene punto y texto
+                return [...prev, {
+                  id: data.id,
+                  point: data.notePoint,
+                  text: data.noteText,
+                  showBubble: false
+                }];
+              }
+              
+              return prev;
+            });
+          });
+          
+          // Confirmation for note update
+          socketRef.current.on('noteUpdateConfirmed', (response: any) => {
+            if (response.success) {
+              console.log('Note update confirmed on server');
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Failed to initialize socket:', error);
+      }
+    };
+    
+    // Try to connect in the background after a delay to prioritize UI rendering
+    setTimeout(connectSocket, 1500);
 
-    // Load initial canvas state from Supabase
-    const loadCanvasState = async () => {
+    // Load initial canvas state from Supabase - immediately to speed up page load
+    loadCanvasState();
+    
+    // Function to load canvas state directly from Supabase
+    async function loadCanvasState() {
       try {
         console.log('Fetching initial state from Supabase...')
-        const { data, error } = await supabase
+        
+        // First, get only the latest canvas state to render quickly
+        const { data: latestData, error: latestError } = await supabase
           .from('canvas_states')
-          .select('*')
+          .select('id, state, created_at')
           .order('created_at', { ascending: false })
           .limit(1)
-
-        if (error) {
-          throw error
+        
+        if (latestError) {
+          throw latestError
         }
-
-        if (data && data.length > 0) {
-          console.log('Found saved state, loading...')
+        
+        if (latestData && latestData.length > 0) {
+          const latestCanvas = latestData[0];
+          lastCanvasStateIdRef.current = latestCanvas.id;
+          
+          // Load the canvas image first for faster visual feedback
           const img = new Image()
           img.onload = () => {
+            const canvas = canvasRef.current;
+            const ctx = canvas?.getContext("2d");
+            
+            if (!canvas || !ctx) return;
+            
             ctx.clearRect(0, 0, canvas.width, canvas.height)
             ctx.drawImage(img, 0, 0)
           }
-          img.src = data[0].state
+          img.src = latestCanvas.state
+          
+          // Then load note data in the background
+          loadNoteData();
         }
       } catch (error) {
-        console.error('Error loading initial state:', error)
+        console.error('Error loading canvas state:', error)
+      }
+    }
+    
+    // Load note data separately to improve initial load time
+    async function loadNoteData() {
+      try {
+        const { data, error } = await supabase
+          .from('canvas_states')
+          .select('id, note_text, note_x, note_y')
+          .order('created_at', { ascending: false })
+          .not('note_text', 'is', null)
+          .not('note_text', 'eq', '')
+        
+        if (error) {
+          throw error
+        }
+        
+        if (data && data.length > 0) {
+          // Cargar todas las notas que tengan texto
+          const notesWithText = data
+            .filter(record => record.note_text && record.note_text.trim() && record.note_x && record.note_y)
+            .map(record => ({
+              id: record.id,
+              point: { x: record.note_x, y: record.note_y },
+              text: record.note_text,
+              showBubble: false // Inicialmente ningún bubble se muestra
+            }));
+          
+          console.log('Loaded notes with text:', notesWithText.length)
+          setAllNotes(notesWithText)
+        }
+      } catch (error) {
+        console.error('Error loading note data:', error)
       }
     }
 
-    loadCanvasState()
-
-    // Solicitar el estado actual del canvas al conectarse
-    socketRef.current.emit('requestCanvasState')
-
-    // Escuchar el estado inicial del canvas
-    socketRef.current.on('canvasState', (imageData: string) => {
-      if (!imageData) return
-      console.log('Received canvas state')
-      
-      const img = new Image()
-      img.onload = () => {
-        ctx.clearRect(0, 0, canvas.width, canvas.height) // Limpiar el canvas primero
-        ctx.drawImage(img, 0, 0)
-      }
-      img.src = imageData
-    })
-
-    socketRef.current.on(
-      "draw",
-      (data: {
-        fromX: number
-        fromY: number
-        toX: number
-        toY: number
-        tool: Tool
-      }) => {
-        drawLine(ctx, data.fromX, data.fromY, data.toX, data.toY, data.tool)
-      },
-    )
-
     return () => {
-      socketRef.current.disconnect()
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
     }
   }, [])
 
@@ -378,6 +549,9 @@ export default function Home() {
 
     const handleTouchStart = (e: TouchEvent) => {
       e.preventDefault();
+      
+      // Ocultar todas las burbujas al inicio de cualquier interacción táctil
+      hideAllBubbles();
       
       // Incrementar el ID de sesión para cada nuevo toque
       sessionIdRef.current++;
@@ -786,7 +960,7 @@ export default function Home() {
           drawLine(ctx, pendingDrawRef.current.x, pendingDrawRef.current.y, x, y, tool);
           
           // Emitir el evento de dibujo al socket para sincronización
-          socketRef.current.emit("draw", {
+          safeSocketEmit("draw", {
             fromX: pendingDrawRef.current.x,
             fromY: pendingDrawRef.current.y,
             toX: x,
@@ -1647,7 +1821,7 @@ export default function Home() {
     if (ctx && lastPoint.current) {
       drawLine(ctx, lastPoint.current.x, lastPoint.current.y, x, y, tool)
       
-      socketRef.current.emit("draw", {
+      safeSocketEmit("draw", {
         fromX: lastPoint.current.x,
         fromY: lastPoint.current.y,
         toX: x,
@@ -1681,6 +1855,7 @@ export default function Home() {
     
     if (!isDrawingMode) {
       setIsPanning(true)
+      hideAllBubbles() // Ocultar burbujas inmediatamente
       return
     }
 
@@ -1754,6 +1929,14 @@ export default function Home() {
   };
 
   const handleAccept = async () => {
+    // Evitar múltiples operaciones de guardado simultáneas
+    if (processingSaveRef.current) {
+      console.log('Ya hay un guardado en proceso, ignorando solicitud');
+      return;
+    }
+    
+    processingSaveRef.current = true;
+    
     // Add date text only if there has been any drawing
     if (drawingBoundsRef.current) {
       const now = new Date()
@@ -1796,37 +1979,225 @@ export default function Home() {
             const imageData = canvas.toDataURL('image/png')
             console.log('Saving to Supabase...')
             
-            const { error } = await supabase
-              .from('canvas_states')
-              .insert([
-                {
-                  state: imageData,
-                  created_at: new Date().toISOString()
+            // Configurar el punto de nota justo a la derecha de la fecha/hora
+            // Posicionar el punto de nota a 20px a la derecha de la fecha
+            const noteX = textX + 80;
+            const noteY = textY + 10; // A la altura de la fecha
+            
+            // Guardar la posición del punto de nota
+            const notePoint = { x: noteX, y: noteY };
+            setNotePoint(notePoint);
+            
+            // Agregar inmediatamente un punto temporal mientras se guarda
+            const temporaryId = Date.now(); // ID temporal único
+            setAllNotes(prev => [
+              ...prev,
+              {
+                id: temporaryId,
+                point: notePoint,
+                text: '(Guardando...)',
+                showBubble: false,
+                isTemporary: true // Marcar como temporal
+              }
+            ]);
+            
+            // Mostrar el modal de entrada de texto ANTES de guardar
+            setNoteText(''); // Resetear cualquier texto previo
+            setShowNoteInput(true);
+            
+            // Guardar el canvas solo después de que el usuario introduzca la nota
+            // Esta función será llamada por saveNoteText
+            const saveCanvasWithNote = async (noteTextContent: string) => {
+              try {
+                // Asegurarnos de que el texto es una cadena, incluso si está vacío
+                const finalNoteText = (noteTextContent || '').toString();
+                console.log('Guardando canvas con texto de nota:', finalNoteText, 'longitud:', finalNoteText.length);
+                
+                // Guardar también las coordenadas del punto y los límites del dibujo
+                const drawingBoundsJSON = JSON.stringify(drawingBoundsRef.current);
+                console.log('Inserting record with note text:', finalNoteText);
+                
+                // Detectar valores inusuales para depuración
+                if (finalNoteText.includes('undefined') || finalNoteText.includes('null')) {
+                  console.warn('ADVERTENCIA: El texto de la nota contiene valores inusuales:', finalNoteText);
                 }
-              ])
+                
+                const insertObj = {
+                  state: imageData,
+                  created_at: new Date().toISOString(),
+                  note_text: finalNoteText,
+                  note_x: noteX,
+                  note_y: noteY,
+                  drawing_bounds: drawingBoundsJSON
+                };
+                
+                console.log('Objeto completo a insertar:', JSON.stringify(insertObj));
+                
+                const { data, error } = await supabase
+                  .from('canvas_states')
+                  .insert([insertObj])
+                  .select();
 
-            if (error) {
-              console.error('Error saving to Supabase:', error)
-              throw error
-            }
+                if (error) {
+                  console.error('Error saving to Supabase:', error)
+                  throw error
+                }
 
-            console.log('Successfully saved to Supabase')
+                console.log('Successfully saved to Supabase with note text, data:', data)
+                
+                // Almacenar el ID del registro recién creado
+                if (data && data.length > 0) {
+                  const newNoteId = data[0].id;
+                  lastCanvasStateIdRef.current = newNoteId;
+                  console.log('Stored canvas state ID:', lastCanvasStateIdRef.current);
+                  console.log('VERIFICACIÓN FINAL - Texto de nota guardado:', data[0].note_text);
+                  
+                  // Si hay texto, añadir esta nota al array de notas
+                  if (finalNoteText.trim()) {
+                    // Reemplazar la nota temporal con la nota real
+                    setAllNotes(prev => prev.map(note => 
+                      note.isTemporary 
+                        ? {
+                            id: newNoteId,
+                            point: { x: noteX, y: noteY },
+                            text: finalNoteText,
+                            showBubble: false
+                          }
+                        : note
+                    ));
+                  } else {
+                    // Si no hay texto, eliminar la nota temporal
+                    setAllNotes(prev => prev.filter(note => !note.isTemporary));
+                  }
+                  
+                  // También emitir por socket para actualización en tiempo real
+                  safeSocketEmit('saveCanvasState', {
+                    id: newNoteId,
+                    imageData,
+                    notePoint: { x: noteX, y: noteY },
+                    noteText: finalNoteText,
+                    drawingBounds: drawingBoundsRef.current
+                  });
+                }
+              } catch (error) {
+                console.error('Error saving canvas with note:', error);
+                alert('Error al guardar el dibujo. Inténtalo de nuevo.');
+              } finally {
+                processingSaveRef.current = false;
+              }
+            };
             
-            // También emitir por socket para actualización en tiempo real
-            socketRef.current.emit('saveCanvasState', imageData)
+            // Guardar la función para ser llamada por saveNoteText
+            window.saveCanvasWithNoteRef = saveCanvasWithNote;
             
-            // Reiniciar la bounding box del dibujo después de guardar
-            drawingBoundsRef.current = null;
+            // Enfocar el input cuando se muestre
+            setTimeout(() => {
+              if (noteInputRef.current) {
+                noteInputRef.current.focus();
+              }
+            }, 100);
 
           } catch (error) {
-            console.error('Error in handleAccept:', error)
+            console.error('Error in handleAccept:', error);
+            processingSaveRef.current = false;
           }
         }
       }
+    } else {
+      processingSaveRef.current = false;
     }
     
     // Always switch to pan mode
-    handleToolChange("pan")
+    handleToolChange("pan");
+  }
+
+  // Nueva función para guardar el texto de la nota
+  const saveNoteText = async () => {
+    // Cerramos el modal primero
+    setShowNoteInput(false);
+    
+    // Depurar valor actual de la nota
+    console.log('Valor de noteText al guardar:', noteText, 'type:', typeof noteText, 'length:', noteText?.length);
+    
+    try {
+      // Si saveCanvasWithNoteRef está disponible, significa que estamos en el flujo inicial de guardado
+      if (window.saveCanvasWithNoteRef) {
+        // Llamar a la función que guarda todo junto
+        console.log('Guardando canvas con nota (flujo directo):', noteText);
+        await window.saveCanvasWithNoteRef(noteText);
+        // Limpiar la referencia
+        delete window.saveCanvasWithNoteRef;
+        // Quitar la notificación de éxito según lo solicitado
+        return;
+      }
+      
+      // Caso alternativo: ya tenemos un canvas guardado y solo queremos actualizar la nota
+      if (!noteText?.trim()) {
+        console.log('No se actualizó la nota porque está vacía');
+        return;
+      }
+      
+      console.log("Actualizando nota existente con ID:", lastCanvasStateIdRef.current);
+      
+      if (lastCanvasStateIdRef.current === null) {
+        console.error('No ID almacenado para actualizar la nota');
+        return;
+      }
+      
+      // Probemos a hacerlo con una cadena literal para ver si hay algún problema con el tipo de datos
+      const noteTextToSave = noteText.toString();
+      console.log('Texto de nota a guardar (convertido):', noteTextToSave);
+      
+      // Realizar la actualización directamente con el ID almacenado
+      const { data: updateData, error: updateError } = await supabase
+        .from('canvas_states')
+        .update({ note_text: noteTextToSave })
+        .eq('id', lastCanvasStateIdRef.current)
+        .select();
+        
+      if (updateError) {
+        console.error('Error updating note text:', updateError);
+        alert('Error al guardar la nota. Inténtalo de nuevo.');
+        return;
+      }
+      
+      console.log('Note text updated successfully, response:', updateData);
+      
+      // Verificar que la actualización se realizó correctamente
+      if (updateData && updateData.length > 0) {
+        console.log('Updated note_text value:', updateData[0].note_text);
+        
+        // Asegurarse de que el estado local esté sincronizado
+        setNoteText(updateData[0].note_text);
+        
+        // También emitir por socket para actualización en tiempo real
+        safeSocketEmit('updateNoteText', {
+          id: lastCanvasStateIdRef.current,
+          noteText: updateData[0].note_text,
+          notePoint: notePoint
+        });
+        
+        // Quitar la notificación de éxito según lo solicitado
+      }
+    } catch (error) {
+      console.error('Error completo al guardar texto de nota:', error);
+      alert('Error al guardar la nota. Inténtalo de nuevo.');
+    }
+  }
+  
+  // Modificar la función toggleNote para trabajar con múltiples notas
+  const toggleNote = (noteId?: number) => {
+    if (noteId !== undefined) {
+      // Si recibimos un ID específico, alternamos esa nota específica
+      setAllNotes(prev => prev.map(note => 
+        note.id === noteId 
+          ? { ...note, showBubble: !note.showBubble } 
+          : note
+      ));
+    } else {
+      // Mantener el comportamiento antiguo para compatibilidad
+      setShowNote(!showNote);
+    }
   }
 
   const saveCanvasState = async () => {
@@ -1929,6 +2300,37 @@ export default function Home() {
     });
   };
 
+  // Helper function to safely emit socket events
+  const safeSocketEmit = (eventName: string, data: any) => {
+    if (socketRef.current) {
+      socketRef.current.emit(eventName, data);
+    }
+  };
+
+  // Efecto para ocultar todas las burbujas de notas al hacer pan
+  useEffect(() => {
+    if (isPanning) {
+      console.log("Ocultando burbujas debido a pan");
+      // Ocultar todas las burbujas cuando se inicia el pan
+      setAllNotes(prev => prev.map(note => ({
+        ...note,
+        showBubble: false
+      })));
+      
+      // También ocultar la burbuja antigua por compatibilidad
+      setShowNote(false);
+    }
+  }, [isPanning]);
+
+  // Función para ocultar todas las burbujas
+  const hideAllBubbles = () => {
+    setAllNotes(prev => prev.map(note => ({
+      ...note,
+      showBubble: false
+    })));
+    setShowNote(false);
+  };
+
   return (
     <main ref={containerRef} className="relative w-screen h-screen overflow-hidden">
       <div
@@ -1960,6 +2362,114 @@ export default function Home() {
             height: `${CANVAS_HEIGHT}px`,
           }}
         />
+        
+        {/* Renderizar todos los puntos de notas cargados */}
+        {allNotes.map(note => (
+          <div key={note.id}>
+            {/* Punto de nota */}
+            <div 
+              className={`absolute w-5 h-5 rounded-full cursor-pointer shadow-sm ${
+                note.isTemporary ? 'bg-yellow-400 animate-pulse' : 
+                note.showBubble ? 'bg-white' : 'bg-gray-300 opacity-75'
+              }`}
+              style={{
+                left: `${(note.point.x * transform.scale) - transform.offset.x - 2.5}px`,
+                top: `${(note.point.y * transform.scale) - transform.offset.y - 6}px`,
+                zIndex: 1000,
+                transition: 'background-color 0.2s ease-in-out, opacity 0.2s ease-in-out'
+              }}
+              onClick={() => toggleNote(note.id)}
+            />
+            
+            {/* Burbuja de texto para mostrar la nota - solo si está activada */}
+            {note.showBubble && (
+              <div 
+                className="absolute bg-white p-3 rounded-lg shadow-lg max-w-xs z-50 border border-gray-300 animate-in fade-in duration-200"
+                style={{
+                  left: `${(note.point.x * transform.scale) - transform.offset.x + 20}px`,
+                  top: `${(note.point.y * transform.scale) - transform.offset.y - 15}px`,
+                  opacity: 1,
+                  transition: 'opacity 0.2s ease-in-out'
+                }}
+              >
+                <p className="text-sm font-medium text-gray-800">{note.text}</p>
+              </div>
+            )}
+          </div>
+        ))}
+        
+        {/* Punto de nota actual (para compatibilidad y modo de edición) */}
+        {notePoint && showNoteInput && (
+          <div 
+            className="absolute w-5 h-5 bg-white rounded-full cursor-pointer shadow-sm"
+            style={{
+              left: `${(notePoint.x * transform.scale) - transform.offset.x - 2.5}px`,
+              top: `${(notePoint.y * transform.scale) - transform.offset.y - 6}px`,
+              zIndex: 1000,
+              transition: 'background-color 0.2s ease-in-out, opacity 0.2s ease-in-out'
+            }}
+            onClick={() => toggleNote()}
+          />
+        )}
+        
+        {/* Burbuja de texto para mostrar la nota actual (para compatibilidad) */}
+        {notePoint && showNote && noteText && (
+          <div 
+            className="absolute bg-white p-3 rounded-lg shadow-lg max-w-xs z-50 border border-gray-300 animate-in fade-in duration-200"
+            style={{
+              left: `${(notePoint.x * transform.scale) - transform.offset.x + 20}px`,
+              top: `${(notePoint.y * transform.scale) - transform.offset.y - 15}px`,
+              opacity: 1,
+              transition: 'opacity 0.2s ease-in-out'
+            }}
+          >
+            <p className="text-sm font-medium text-gray-800">{noteText}</p>
+          </div>
+        )}
+        
+        {/* Modal para introducir texto */}
+        {showNoteInput && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white p-6 rounded-lg shadow-xl max-w-md w-full mx-12">
+              <h3 className="text-lg font-semibold mb-4">quieres dejar alguna nota? :)</h3>
+              <input
+                ref={noteInputRef}
+                type="text"
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                className="w-full border border-gray-300 rounded-md p-2 mb-4"
+                placeholder="uhmm estoy pensando en..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    saveNoteText();
+                  }
+                }}
+              />
+              <div className="flex justify-end space-x-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => {
+                    // Eliminar el punto temporal si existe
+                    setAllNotes(prev => prev.filter(note => !note.isTemporary));
+                    // Cerrar el modal
+                    setShowNoteInput(false);
+                    // Limpiar la referencia si existe
+                    if (window.saveCanvasWithNoteRef) {
+                      delete window.saveCanvasWithNoteRef;
+                    }
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button 
+                  onClick={saveNoteText}
+                >
+                  Guardar
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* Zoom indicator */}
         <div className="fixed top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-full font-mono text-sm z-50">

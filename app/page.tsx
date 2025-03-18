@@ -1757,10 +1757,15 @@ export default function Home() {
     // Add date text only if there has been any drawing
     if (drawingBoundsRef.current) {
       const now = new Date()
-      const formattedDateTime = now.toLocaleString("default", {
-        year: "numeric",
-        month: "2-digit",
+      // Formatear fecha como DD/MM/YYYY
+      const formattedDate = now.toLocaleString("default", {
         day: "2-digit",
+        month: "2-digit",
+        year: "numeric"
+      }).replace(/\s/g, '')
+      
+      // Formatear hora por separado
+      const formattedTime = now.toLocaleString("default", {
         hour: "2-digit",
         minute: "2-digit"
       })
@@ -1778,10 +1783,13 @@ export default function Home() {
             // Usar la bounding box completa del dibujo para posicionar el texto
             // Centrar horizontalmente y colocar debajo del dibujo
             const textX = (drawingBoundsRef.current.minX + drawingBoundsRef.current.maxX) / 2
-            // Añadir un margen de 40px debajo del punto más bajo del dibujo
-            const textY = drawingBoundsRef.current.maxY + 40
+            // Añadir un margen de 80px debajo del punto más bajo del dibujo
+            const textY = drawingBoundsRef.current.maxY + 80
             
-            ctx.fillText(formattedDateTime, textX, textY)
+            // Dibujar la fecha en la primera línea
+            ctx.fillText(formattedDate, textX, textY)
+            // Dibujar la hora en la segunda línea (25px más abajo)
+            ctx.fillText(formattedTime, textX, textY + 25)
             ctx.restore()
 
             // Guardar el estado del canvas directamente en Supabase

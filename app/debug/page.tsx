@@ -5,6 +5,7 @@ import io from "socket.io-client"
 import { Button } from "@/components/ui/button"
 import { Pencil, Eraser, Move, Check } from "lucide-react"
 import { supabase } from "@/lib/supabaseClient"
+import VerticalCutReveal from "@/fancy/components/text/vertical-cut-reveal"
 
 const CANVAS_WIDTH = 3000
 const CANVAS_HEIGHT = 2000
